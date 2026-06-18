@@ -5,6 +5,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+
 import java.util.List;
 import java.util.Map;
 
@@ -17,6 +21,8 @@ public class GeminiService {
 
     @Value("${app.api.gemini-url}")
     private String baseUrl;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private WebClient getClient() {
         return WebClient.builder().baseUrl(baseUrl).build();
@@ -43,7 +49,7 @@ public class GeminiService {
         try {
             String response = getClient()
                 .post()
-                .uri("/models/gemini-2.0-flash:generateContent?key=" + apiKey)
+                .uri("/models/gemini-3.1-flash-lite:generateContent?key=" + apiKey)
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(requestBody)
                 .retrieve()
@@ -137,17 +143,47 @@ public class GeminiService {
             """, styleInstruction, langInstruction, transcript);
     }
 
-    private String parseGeminiTextResponse(String response) {
-        // Simple JSON parsing - in production use Jackson
+        private String parseGeminiTextResponse(String response) {
         try {
-            int textStart = response.indexOf("\"text\"") + 9;
-            int textEnd = response.indexOf("\"", textStart);
-            // Handle escaped characters
-            String text = response.substring(textStart, response.indexOf("\"\n", textStart));
-            return text.replace("\\n", "\n").replace("\\\"", "\"");
+            JsonNode root = objectMapper.readTree(response);
+            
+            // Check for API error in response body
+            if (root.has("error")) {
+                String errMsg = root.path("error").path("message").asText();
+                throw new RuntimeException("Gemini API error: " + errMsg);
+            }
+            
+            JsonNode candidates = root.path("candidates");
+            if (candidates.isEmpty()) {
+                log.error("No candidates in Gemini response: {}", response);
+                throw new RuntimeException("AI returned no content (may be filtered or empty)");
+            }
+            
+            JsonNode firstCandidate = candidates.get(0);
+            
+            // Check finish reason
+            String finishReason = firstCandidate.path("finishReason").asText("");
+            if ("SAFETY".equals(finishReason) || "RECITATION".equals(finishReason)) {
+                throw new RuntimeException("Content blocked: " + finishReason);
+            }
+            
+            JsonNode parts = firstCandidate.path("content").path("parts");
+            if (parts.isEmpty()) {
+                throw new RuntimeException("AI response has no text parts");
+            }
+            
+            // ✅ Properly extracts only the "text" field, ignoring "thoughtSignature"
+            String text = parts.get(0).path("text").asText();
+            if (text.isEmpty()) {
+                throw new RuntimeException("AI returned empty text");
+            }
+            
+            return text.trim();
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
-            log.error("Failed to parse Gemini response: {}", response);
-            return response; // Return raw if parsing fails
+            log.error("Failed to parse Gemini response: {}", response, e);
+            throw new RuntimeException("Failed to parse AI response: " + e.getMessage());
         }
     }
 

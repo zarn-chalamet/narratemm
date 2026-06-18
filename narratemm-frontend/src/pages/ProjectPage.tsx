@@ -8,7 +8,7 @@ import {
 import { useProjectStore } from '../store/projectStore';
 // Services imported for workflow step components
 import { transcriptService } from '../services/transcriptService';
-// import { scriptService } from '../services/scriptService';
+import { scriptService } from '../services/scriptService';
 // import { voiceService } from '../services/voiceService';
 // import { exportService, type ExportSettings } from '../services/exportService';
 import { Button } from '../components/ui/Button';
@@ -68,6 +68,7 @@ export const ProjectPage: React.FC = () => {
       case 3:
         return (
           <Step3Script 
+            project={project}
             script={script}
             setScript={setScript}
             isProcessing={isProcessing}
@@ -367,15 +368,18 @@ const Step2Transcribe: React.FC<{
 
 // Step 3: Script Generation
 const Step3Script: React.FC<{
+  project: any;
   script: any;
   setScript: (s: any) => void;
   isProcessing: boolean;
   setIsProcessing: (p: boolean) => void;
   onNext: () => void;
-}> = ({ script, setScript, isProcessing, setIsProcessing }) => {
+}> = ({ project, script, setScript, isProcessing, setIsProcessing }) => {
   const [style, setStyle] = useState<'dramatic' | 'casual' | 'spoiler' | 'hype'>('dramatic');
   const [language, setLanguage] = useState<'myanmar' | 'english' | 'both'>('myanmar');
   const [editedContent, setEditedContent] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const styles = [
     { value: 'dramatic', label: 'Dramatic', emoji: '🎭' },
@@ -390,35 +394,63 @@ const Step3Script: React.FC<{
     { value: 'both', label: 'Both', flag: '🌐' },
   ] as const;
 
+  // Load existing script when component mounts
+  useEffect(() => {
+    const loadExisting = async () => {
+      if (script || !project?.id) return;
+      try {
+        const existing = await scriptService.get(project.id);
+        if (existing) {
+          setScript(existing);
+          setEditedContent(existing.content);
+          setStyle(existing.style as any);
+          setLanguage(existing.language as any);
+        }
+      } catch {
+        // No existing script — that's fine
+      }
+    };
+    loadExisting();
+  }, [project?.id]);
+
+  // Debounced auto-save when content is edited
+  useEffect(() => {
+    if (!script || editedContent === script.content) return;
+
+    const timer = setTimeout(async () => {
+      setIsSaving(true);
+      try {
+        const updated = await scriptService.update(project.id, editedContent);
+        setScript(updated);
+      } catch (err) {
+        console.error('Failed to save script edits', err);
+      } finally {
+        setIsSaving(false);
+      }
+    }, 1500); // Auto-save 1.5s after user stops typing
+
+    return () => clearTimeout(timer);
+  }, [editedContent, project?.id]);
+
   const handleGenerate = async () => {
     setIsProcessing(true);
-    
-    await new Promise(r => setTimeout(r, 3000));
-    
-    const generatedScript = style === 'dramatic' 
-      ? `🎬 ဒီအပိုင်းမှာ အရမ်းကို စိတ်လှုပ်ရှားစရာကောင်းပါတယ်!
+    setError(null);
 
-မင်းသမီး ထိန်ထိန်က သူ့ရဲ့ ဆုံးရှုံးသွားတဲ့ အချစ်ကို ရှာဖွေဖို့ ရန်ကုန်မြို့ကို ပြန်လာခဲ့ပါတယ်။ နှစ်ပေါင်းများစွာ ကွဲကွာခဲ့ရပြီးနောက် သူတို့ ပြန်လည်ဆုံစည်းနိုင်ပါ့မလား?
-
-💔 သူမရဲ့ မျက်ရည်တွေ၊ သူ့ရဲ့ နောင်တ... အားလုံးက ဒီအပိုင်းမှာ ပေါ်လွင်လာပါတယ်။
-
-⚡ ဘာတွေဖြစ်သွားမလဲ? နောက်အပိုင်းမှာ ဆက်ကြည့်ကြရအောင်!`
-      : `ဟေး အားလုံးပဲ! ဒီအပိုင်းက တော်တော်ကောင်းတယ်နော်...
-
-မင်းသမီးက ပြန်လာပြီ။ သူ့ချစ်သူကို ရှာဖွေနေတယ်။ ဘာတွေဖြစ်မလဲဆိုတာ ကိုယ်တိုင်ကြည့်ကြည့်နော်!
-
-👋 Like လုပ်ပြီး Subscribe လုပ်ဖို့ မမေ့နဲ့နော်!`;
-    
-    setScript({
-      id: 'script-1',
-      projectId: 'demo',
-      content: generatedScript,
-      style,
-      language,
-      segments: [],
-    });
-    setEditedContent(generatedScript);
-    setIsProcessing(false);
+    try {
+      const generated = await scriptService.generate(project.id, style, language);
+      setScript(generated);
+      setEditedContent(generated.content);
+    } catch (err: any) {
+      const message =
+        err.response?.data?.message ||
+        err.response?.data?.error ||
+        err.message ||
+        'Script generation failed';
+      setError(message);
+      console.error('Script generation error:', err);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   if (script) {
@@ -427,12 +459,15 @@ const Step3Script: React.FC<{
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-bold text-white">Generated Script</h2>
-            <p className="text-sm text-gray-400">Style: {styles.find(s => s.value === script.style)?.label}</p>
+            <p className="text-sm text-gray-400">
+              Style: {styles.find(s => s.value === script.style)?.label} •{' '}
+              Language: {languages.find(l => l.value === script.language)?.label}
+            </p>
           </div>
           <Button 
             variant="outline" 
             size="sm"
-            onClick={() => setScript(null)}
+            onClick={() => { setScript(null); setEditedContent(''); }}
             leftIcon={<RefreshCw className="w-4 h-4" />}
           >
             Regenerate
@@ -446,7 +481,9 @@ const Step3Script: React.FC<{
         />
         
         <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-500">Edit the script as needed before generating voice-over</span>
+          <span className="text-gray-500">
+            {isSaving ? '💾 Saving...' : 'Edit the script as needed before generating voice-over'}
+          </span>
           <span className="text-gray-400">{editedContent.length} characters</span>
         </div>
       </div>
@@ -473,11 +510,12 @@ const Step3Script: React.FC<{
             <button
               key={s.value}
               onClick={() => setStyle(s.value)}
+              disabled={isProcessing}
               className={`p-4 rounded-xl border text-center transition-all ${
                 style === s.value
                   ? 'border-violet-500 bg-violet-500/10'
                   : 'border-[#2a2a3e] hover:border-gray-600'
-              }`}
+              } ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               <span className="text-2xl mb-2 block">{s.emoji}</span>
               <span className={`text-sm font-medium ${
@@ -496,11 +534,12 @@ const Step3Script: React.FC<{
             <button
               key={l.value}
               onClick={() => setLanguage(l.value)}
+              disabled={isProcessing}
               className={`p-4 rounded-xl border text-center transition-all ${
                 language === l.value
                   ? 'border-violet-500 bg-violet-500/10'
                   : 'border-[#2a2a3e] hover:border-gray-600'
-              }`}
+              } ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               <span className="text-xl mb-1 block">{l.flag}</span>
               <span className={`text-sm font-medium ${
@@ -510,6 +549,12 @@ const Step3Script: React.FC<{
           ))}
         </div>
       </div>
+
+      {error && (
+        <div className="max-w-md mx-auto p-3 bg-red-500/10 border border-red-500/30 rounded-xl">
+          <p className="text-sm text-red-400 text-center">{error}</p>
+        </div>
+      )}
 
       <div className="text-center">
         {isProcessing ? (

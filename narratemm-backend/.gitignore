@@ -9,6 +9,11 @@ target/
 .env.local
 .env.*.local
 
+# H2 Database files
+narratemm-backend/data/
+*.mv.db
+*.trace.db
+
 ### STS ###
 .apt_generated
 .classpath
