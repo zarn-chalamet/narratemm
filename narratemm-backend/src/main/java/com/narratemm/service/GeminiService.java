@@ -5,10 +5,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import reactor.util.retry.Retry;
 
-
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -69,41 +72,51 @@ public class GeminiService {
      * Generate TTS audio using Gemini
      */
     public byte[] generateTTS(String text, String voiceName, String stylePrompt, double speed) {
-        // Gemini 2.5 Flash TTS endpoint
-        // Note: The actual TTS API format may differ - check latest Gemini docs
-        Map<String, Object> requestBody = Map.of(
-            "contents", List.of(
-                Map.of("parts", List.of(
-                    Map.of("text", stylePrompt + "\n\n" + text)
-                ))
-            ),
+        String fullPrompt = (stylePrompt != null && !stylePrompt.isBlank() ? stylePrompt + "\n\n" : "") + text;
+
+        Map<String, Object> body = Map.of(
+            "contents", List.of(Map.of("parts", List.of(Map.of("text", fullPrompt)))),
             "generationConfig", Map.of(
                 "response_modalities", List.of("AUDIO"),
                 "speech_config", Map.of(
                     "voice_config", Map.of(
-                        "prebuilt_voice_config", Map.of(
-                            "voice_name", voiceName
-                        )
+                        "prebuilt_voice_config", Map.of("voice_name", voiceName)
                     )
                 )
             )
         );
 
         try {
-            String response = getClient()
-                .post()
-                .uri("/models/gemini-2.5-flash-preview-tts:generateContent?key=" + apiKey)
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(requestBody)
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
+            log.info("🎤 Starting TTS generation... This may take 2 to 5 minutes on free tier.");
+            log.info("Model: gemini-2.5-flash-preview-tts | Voice: {}", voiceName);
 
-            // Parse Base64 encoded audio from response
-            return parseGeminiAudioResponse(response);
+            String response = getClient()
+                    .post()
+                    .uri("/models/gemini-2.5-flash-preview-tts:generateContent?key=" + apiKey)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .retryWhen(Retry.backoff(2, Duration.ofSeconds(10)))   // retry twice
+                    .block(Duration.ofSeconds(300));   // ← 5 minutes (300 seconds)
+
+            log.info("✅ TTS generation completed successfully");
+            return parseAudioResponse(response);
+
+        } catch (WebClientResponseException e) {
+            String errorBody = e.getResponseBodyAsString();
+            log.error("Gemini TTS Error [{}]: {}", e.getStatusCode(), errorBody);
+            
+            if (e.getStatusCode().value() == 429) {
+                throw new RuntimeException("Daily voice quota exceeded. You can only generate ~3 voices per day.");
+            }
+            if (e.getStatusCode().value() == 400) {
+                throw new RuntimeException("This voice model is not available. Please try a different voice.");
+            }
+            throw new RuntimeException("Voice generation failed: " + e.getMessage());
         } catch (Exception e) {
-            log.error("Gemini TTS error: {}", e.getMessage());
-            throw new RuntimeException("Failed to generate voice-over: " + e.getMessage());
+            log.error("TTS Timeout or Error", e);
+            throw new RuntimeException("Voice generation is taking too long (over 5 minutes). Please try again later or use a shorter script.");
         }
     }
 
@@ -187,17 +200,29 @@ public class GeminiService {
         }
     }
 
-    private byte[] parseGeminiAudioResponse(String response) {
-        // Parse base64 audio data from Gemini TTS response
+     // Proper JSON parsing for audio (Base64)
+    private byte[] parseAudioResponse(String response) {
         try {
-            // The audio data is in: candidates[0].content.parts[0].inlineData.data
-            int dataStart = response.indexOf("\"data\"") + 9;
-            int dataEnd = response.indexOf("\"", dataStart);
-            String base64Audio = response.substring(dataStart, dataEnd);
-            return java.util.Base64.getDecoder().decode(base64Audio);
+            JsonNode root = objectMapper.readTree(response);
+            if (root.has("error")) {
+                throw new RuntimeException(root.path("error").path("message").asText());
+            }
+
+            String base64 = root.path("candidates")
+                    .get(0)
+                    .path("content")
+                    .path("parts")
+                    .get(0)
+                    .path("inlineData")
+                    .path("data")
+                    .asText();
+
+            if (base64.isBlank()) throw new RuntimeException("No audio data returned");
+
+            return java.util.Base64.getDecoder().decode(base64);
         } catch (Exception e) {
-            log.error("Failed to parse Gemini audio response");
-            throw new RuntimeException("Failed to parse audio data");
+            log.error("Audio parsing failed", e);
+            throw new RuntimeException("Failed to decode audio data");
         }
     }
 }

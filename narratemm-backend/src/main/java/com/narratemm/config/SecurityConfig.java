@@ -31,6 +31,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                     "/api/auth/**",
+                    "/api/voice/audio/**",
                     "/h2-console/**",
                     "/ws/**",
                     "/ws"

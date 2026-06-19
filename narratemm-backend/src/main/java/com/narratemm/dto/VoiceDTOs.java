@@ -11,7 +11,7 @@ public class VoiceDTOs {
     public static class GenerateRequest {
         @NotBlank
         private String voiceName; // Aoede, Puck, Charon, Kore
-
+        private String language;
         private String stylePrompt;
         private Double speed; // 0.5 - 2.0
     }

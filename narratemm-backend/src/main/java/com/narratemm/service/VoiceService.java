@@ -7,41 +7,54 @@ import com.narratemm.entity.VoiceOver;
 import com.narratemm.repository.ScriptRepository;
 import com.narratemm.repository.VoiceOverRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class VoiceService {
 
     private final VoiceOverRepository voiceOverRepository;
     private final ScriptRepository scriptRepository;
     private final ProjectService projectService;
-    private final GeminiService geminiService;
+    private final EdgeTTSService edgeTTSService;
     private final StorageService storageService;
 
     public VoiceResponse generate(String projectId, GenerateRequest request) {
+
         Project project = projectService.getProjectEntity(projectId);
         projectService.updateStatus(projectId, Project.ProjectStatus.VOICEOVER);
 
         Script script = scriptRepository.findByProjectId(projectId)
-                .orElseThrow(() -> new RuntimeException("Script not found. Please generate script first."));
+                .orElseThrow(() -> new RuntimeException(
+                        "Script not found. Please generate script first."));
 
         try {
-            byte[] audioData = geminiService.generateTTS(
+            // Get language: request first, then project, then default to myanmar
+            String language = request.getLanguage() != null
+                    ? request.getLanguage()
+                    :"myanmar";
+
+            log.info("Generating voice for project {} | language={}", projectId, language);
+
+            byte[] audioData = edgeTTSService.generateTTS(
                     script.getContent(),
                     request.getVoiceName(),
-                    request.getStylePrompt() != null ? request.getStylePrompt() : "",
-                    request.getSpeed() != null ? request.getSpeed() : 1.0
+                    request.getSpeed() != null ? request.getSpeed() : 1.0,
+                    language
             );
 
             String audioPath = storageService.saveAudioFile(projectId, audioData, "mp3");
 
-            // Delete old voiceover if exists
-            voiceOverRepository.findByProjectId(projectId).ifPresent(voiceOverRepository::delete);
+            voiceOverRepository.findByProjectId(projectId)
+                    .ifPresent(voiceOverRepository::delete);
 
             VoiceOver voiceOver = VoiceOver.builder()
                     .project(project)
@@ -55,7 +68,9 @@ public class VoiceService {
             projectService.updateStatus(projectId, Project.ProjectStatus.DRAFT);
 
             return toResponse(voiceOver);
+
         } catch (Exception e) {
+            log.error("Voice generation failed: {}", e.getMessage());
             projectService.updateStatus(projectId, Project.ProjectStatus.FAILED);
             throw new RuntimeException("Voice-over generation failed: " + e.getMessage());
         }
@@ -70,7 +85,6 @@ public class VoiceService {
     public Resource getAudioResource(String projectId) {
         VoiceOver vo = voiceOverRepository.findByProjectId(projectId)
                 .orElseThrow(() -> new RuntimeException("Voice-over not found"));
-
         Path path = Paths.get(vo.getAudioPath());
         return new FileSystemResource(path.toFile());
     }
@@ -84,7 +98,8 @@ public class VoiceService {
                 .stylePrompt(vo.getStylePrompt())
                 .speed(vo.getSpeed())
                 .durationSeconds(vo.getDurationSeconds())
-                .createdAt(vo.getCreatedAt() != null ? vo.getCreatedAt().toString() : null)
+                .createdAt(vo.getCreatedAt() != null
+                        ? vo.getCreatedAt().toString() : null)
                 .build();
     }
 }

@@ -9,6 +9,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import org.springframework.http.HttpHeaders;
+
 @RestController
 @RequestMapping("/api/voice")
 @RequiredArgsConstructor
@@ -31,8 +33,12 @@ public class VoiceController {
     @GetMapping("/audio/{projectId}")
     public ResponseEntity<Resource> getAudio(@PathVariable String projectId) {
         Resource resource = voiceService.getAudioResource(projectId);
+
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("audio/mpeg"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline")
+                .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                .header(HttpHeaders.CACHE_CONTROL, "no-cache")
                 .body(resource);
     }
 }
