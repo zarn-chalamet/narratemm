@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, ArrowRight, Check, Upload, FileText, Mic, Scissors, Download,
@@ -9,7 +9,7 @@ import { useProjectStore } from '../store/projectStore';
 // Services imported for workflow step components
 import { transcriptService } from '../services/transcriptService';
 import { scriptService } from '../services/scriptService';
-// import { voiceService } from '../services/voiceService';
+import { voiceService } from '../services/voiceService';
 // import { exportService, type ExportSettings } from '../services/exportService';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -78,7 +78,8 @@ export const ProjectPage: React.FC = () => {
         );
       case 4:
         return (
-          <Step4VoiceOver 
+           <Step4VoiceOver 
+            project={project}
             voiceOver={voiceOver}
             setVoiceOver={setVoiceOver}
             isProcessing={isProcessing}
@@ -560,7 +561,8 @@ const Step3Script: React.FC<{
         {isProcessing ? (
           <div className="flex items-center justify-center gap-2 text-violet-400">
             <Loader2 className="w-5 h-5 animate-spin" />
-            <span>Generating script with Gemini AI...</span>
+            <span>Generating script with Gemini AI... 
+              Generating voice-over... This can take 2–5 minutes on free tier</span>
           </div>
         ) : (
           <Button onClick={handleGenerate} leftIcon={<Wand2 className="w-4 h-4" />}>
@@ -572,18 +574,21 @@ const Step3Script: React.FC<{
   );
 };
 
-// Step 4: Voice-over
+// Step 4: Voice-over (Real Implementation)
 const Step4VoiceOver: React.FC<{
+  project: any;
   voiceOver: any;
   setVoiceOver: (v: any) => void;
   isProcessing: boolean;
   setIsProcessing: (p: boolean) => void;
   onNext: () => void;
-}> = ({ voiceOver, setVoiceOver, isProcessing, setIsProcessing }) => {
+}> = ({ project, voiceOver, setVoiceOver, isProcessing, setIsProcessing }) => {
   const [selectedVoice, setSelectedVoice] = useState<'Aoede' | 'Puck' | 'Charon' | 'Kore'>('Aoede');
   const [stylePrompt, setStylePrompt] = useState('Speak in a warm, engaging tone suitable for drama storytelling');
-  const [speed, setSpeed] = useState(1);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1.0);
+  const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState(0);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   const voices = [
     { name: 'Aoede', gender: 'Female', desc: 'Warm, expressive', emoji: '👩' },
@@ -592,32 +597,65 @@ const Step4VoiceOver: React.FC<{
     { name: 'Kore', gender: 'Female', desc: 'Soft, gentle', emoji: '👧' },
   ] as const;
 
+  // Load existing voice-over when component mounts
+  useEffect(() => {
+    const loadExisting = async () => {
+      if (!project?.id) return;
+      try {
+        const existing = await voiceService.get(project.id);
+        if (existing) setVoiceOver(existing);
+      } catch (err) {
+        // No voice-over exists yet - normal
+      }
+    };
+    loadExisting();
+  }, [project?.id]);
+
   const handleGenerate = async () => {
     setIsProcessing(true);
-    await new Promise(r => setTimeout(r, 4000));
-    
-    setVoiceOver({
-      id: 'voice-1',
-      projectId: 'demo',
-      audioPath: '/demo-audio.mp3',
-      voiceName: selectedVoice,
-      stylePrompt,
-      speed,
-      durationSeconds: 45,
-    });
-    setIsProcessing(false);
+    setError(null);
+    setProgress(0);
+
+    const progressInterval = setInterval(() => {
+      setProgress((p) => (p < 90 ? p + 5 : p));
+    }, 350);
+
+    try {
+      const result = await voiceService.generate(project.id, {
+        voiceName: selectedVoice,
+        stylePrompt: stylePrompt.trim(),
+        speed: parseFloat(speed.toFixed(1)),
+      });
+
+      clearInterval(progressInterval);
+      setProgress(100);
+      setVoiceOver(result);
+    } catch (err: any) {
+      clearInterval(progressInterval);
+      setProgress(0);
+      setError(err.response?.data?.message || err.message || 'Failed to generate voice-over');
+      console.error('Voice generation error:', err);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
-  if (voiceOver) {
+  const audioUrl = voiceService.getAudioUrl(project?.id || '');
+
+  // If we have a voice-over, show player
+  if (voiceOver?.audioPath) {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-bold text-white">Voice-over Ready</h2>
-            <p className="text-sm text-gray-400">Voice: {voiceOver.voiceName} • {voiceOver.durationSeconds}s</p>
+            <p className="text-sm text-gray-400">
+              Voice: <span className="text-violet-400">{voiceOver.voiceName}</span> • 
+              Speed: {voiceOver.speed}x
+            </p>
           </div>
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             size="sm"
             onClick={() => setVoiceOver(null)}
             leftIcon={<RefreshCw className="w-4 h-4" />}
@@ -625,43 +663,22 @@ const Step4VoiceOver: React.FC<{
             Regenerate
           </Button>
         </div>
-        
-        {/* Audio Player */}
-        <div className="bg-[#1a1a24] rounded-xl p-6">
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={() => setIsPlaying(!isPlaying)}
-              className="w-14 h-14 rounded-full bg-violet-500 hover:bg-violet-400 flex items-center justify-center transition-colors"
-            >
-              {isPlaying ? (
-                <Pause className="w-6 h-6 text-white" />
-              ) : (
-                <Play className="w-6 h-6 text-white ml-1" />
-              )}
-            </button>
-            
-            <div className="flex-1">
-              <div className="h-2 bg-[#2a2a3e] rounded-full overflow-hidden">
-                <div className="h-full w-1/3 bg-gradient-to-r from-violet-500 to-purple-500" />
-              </div>
-              <div className="flex justify-between mt-2 text-xs text-gray-500">
-                <span>0:15</span>
-                <span>0:45</span>
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              <Volume2 className="w-5 h-5 text-gray-400" />
-              <div className="w-20 h-2 bg-[#2a2a3e] rounded-full">
-                <div className="h-full w-3/4 bg-gray-400 rounded-full" />
-              </div>
-            </div>
-          </div>
+
+        <div className="bg-[#1a1a24] rounded-2xl p-6">
+          <audio ref={audioRef} src={audioUrl} controls className="w-full" />
         </div>
+
+        {voiceOver.stylePrompt && (
+          <div className="bg-[#1a1a24] rounded-xl p-4">
+            <p className="text-xs text-gray-500 mb-1">Style Prompt Used:</p>
+            <p className="text-sm text-gray-300 italic">"{voiceOver.stylePrompt}"</p>
+          </div>
+        )}
       </div>
     );
   }
 
+  // Generate form
   return (
     <div className="space-y-8">
       <div className="text-center">
@@ -670,7 +687,7 @@ const Step4VoiceOver: React.FC<{
         </div>
         <h2 className="text-xl font-bold text-white mb-2">Generate Voice-over</h2>
         <p className="text-gray-400 max-w-md mx-auto">
-          Choose a voice and style for your narration. Powered by Gemini 2.5 Flash TTS.
+          Choose a voice and style for your narration using Gemini TTS.
         </p>
       </div>
 
@@ -682,11 +699,12 @@ const Step4VoiceOver: React.FC<{
             <button
               key={v.name}
               onClick={() => setSelectedVoice(v.name as any)}
+              disabled={isProcessing}
               className={`p-4 rounded-xl border text-center transition-all ${
                 selectedVoice === v.name
                   ? 'border-violet-500 bg-violet-500/10'
                   : 'border-[#2a2a3e] hover:border-gray-600'
-              }`}
+              } ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               <span className="text-2xl mb-2 block">{v.emoji}</span>
               <span className={`text-sm font-medium block ${
@@ -705,8 +723,9 @@ const Step4VoiceOver: React.FC<{
           type="text"
           value={stylePrompt}
           onChange={(e) => setStylePrompt(e.target.value)}
-          className="w-full bg-[#1a1a24] border border-[#2a2a3e] rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
-          placeholder="Describe how the voice should sound..."
+          disabled={isProcessing}
+          className="w-full bg-[#1a1a24] border border-[#2a2a3e] rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+          placeholder="Speak in a warm, engaging tone suitable for drama storytelling"
         />
       </div>
 
@@ -714,32 +733,47 @@ const Step4VoiceOver: React.FC<{
       <div>
         <div className="flex justify-between mb-2">
           <label className="text-sm font-medium text-gray-300">Speed</label>
-          <span className="text-sm text-violet-400">{speed}x</span>
+          <span className="text-sm text-violet-400">{speed.toFixed(1)}x</span>
         </div>
         <input
           type="range"
           min="0.5"
-          max="2"
+          max="2.0"
           step="0.1"
           value={speed}
           onChange={(e) => setSpeed(parseFloat(e.target.value))}
+          disabled={isProcessing}
           className="w-full accent-violet-500"
         />
         <div className="flex justify-between text-xs text-gray-500 mt-1">
           <span>0.5x</span>
-          <span>1x</span>
-          <span>2x</span>
+          <span>1.0x</span>
+          <span>2.0x</span>
         </div>
       </div>
 
-      <div className="text-center">
+      {error && (
+        <div className="max-w-md mx-auto p-4 bg-red-500/10 border border-red-500/30 rounded-xl">
+          <p className="text-sm text-red-400 text-center">{error}</p>
+        </div>
+      )}
+
+      <div className="text-center pt-6">
         {isProcessing ? (
-          <div className="flex items-center justify-center gap-2 text-violet-400">
-            <Loader2 className="w-5 h-5 animate-spin" />
-            <span>Generating voice-over...</span>
+          <div className="space-y-3">
+            <div className="flex items-center justify-center gap-2 text-violet-400">
+              <Loader2 className="w-5 h-5 animate-spin" />
+              <span>Generating voice-over... {progress}%</span>
+            </div>
+            <div className="h-2.5 bg-[#1a1a24] rounded-full overflow-hidden w-64 mx-auto">
+              <div
+                className="h-full bg-gradient-to-r from-pink-500 to-violet-500 transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
           </div>
         ) : (
-          <Button onClick={handleGenerate} leftIcon={<Mic className="w-4 h-4" />}>
+          <Button onClick={handleGenerate} leftIcon={<Mic className="w-4 h-4" />} size="lg">
             Generate Voice-over
           </Button>
         )}
