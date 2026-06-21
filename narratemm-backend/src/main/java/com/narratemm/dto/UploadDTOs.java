@@ -30,10 +30,11 @@ public class UploadDTOs {
     }
 
     @Data
+    @Builder
     @NoArgsConstructor
     @AllArgsConstructor
-    @Builder
     public static class LogoResponse {
         private String logoPath;
+        private String message;
     }
 }

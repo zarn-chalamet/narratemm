@@ -10,12 +10,13 @@ export interface ExportSettings {
   subtitleFont?: string;
   subtitleSize?: number;
   audioMix?: number;
+  subtitleLanguage?: 'burmese' | 'original'; 
 }
 
 export interface ExportResponse {
   id: string;
   projectId: string;
-  status: string;
+  status: 'processing' | 'done' | 'failed';
   progress: number;
   outputPath: string | null;
   errorMessage: string | null;
@@ -23,9 +24,20 @@ export interface ExportResponse {
   completedAt: string | null;
 }
 
+export interface LogoUploadResponse {
+  logoPath: string;
+  message: string;
+}
+
 export const exportService = {
   start: async (projectId: string, settings: ExportSettings): Promise<ExportResponse> => {
-    const response = await api.post<ExportResponse>(`/export/start/${projectId}`, { settings });
+    
+    console.log('📤 Sending export settings:', settings);
+
+    const response = await api.post<ExportResponse>(
+      `/export/start/${projectId}`,
+      { settings }
+    );
     return response.data;
   },
 
@@ -35,10 +47,21 @@ export const exportService = {
   },
 
   getDownloadUrl: (jobId: string): string => {
-    return `http://localhost:8080/api/export/download/${jobId}`;
+    return `${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api/export/download/${jobId}`;
   },
 
-  cancel: async (jobId: string): Promise<void> => {
-    await api.delete(`/export/${jobId}`);
+  uploadLogo: async (
+    projectId: string,
+    file: File
+  ): Promise<LogoUploadResponse> => {
+    const formData = new FormData();
+    formData.append('logo', file);
+
+    const response = await api.post<LogoUploadResponse>(
+      `/upload/logo/${projectId}`,
+      formData
+    );
+    return response.data;
   },
+
 };

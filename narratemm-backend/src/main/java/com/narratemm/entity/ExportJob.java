@@ -29,6 +29,8 @@ public class ExportJob {
     private Integer progress = 0;
 
     private String outputPath;
+    
+    @Column(length = 2000)
     private String errorMessage;
 
     // Export settings
@@ -41,6 +43,8 @@ public class ExportJob {
     private Boolean subtitleEnabled = true;
     private String subtitleFont;
     private Integer subtitleSize;
+    @Column(name = "subtitle_language")
+    private String subtitleLanguage;
     @Builder.Default
     private Integer audioMix = 70;
 

@@ -14,6 +14,12 @@ narratemm-backend/data/
 *.mv.db
 *.trace.db
 
+# storage project
+storage/
+
+# font
+tools/
+
 ### STS ###
 .apt_generated
 .classpath

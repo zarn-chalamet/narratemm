@@ -2,12 +2,12 @@ package com.narratemm.controller;
 
 import com.narratemm.dto.ExportDTOs.*;
 import com.narratemm.service.ExportService;
+import com.narratemm.service.StorageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.Resource;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/export")
@@ -15,16 +15,17 @@ import org.springframework.web.bind.annotation.*;
 public class ExportController {
 
     private final ExportService exportService;
+    private final StorageService storageService;
 
     @PostMapping("/start/{projectId}")
     public ResponseEntity<ExportResponse> start(
             @PathVariable String projectId,
             @RequestBody StartRequest request) {
-        return ResponseEntity.accepted().body(exportService.start(projectId, request));
+        return ResponseEntity.ok(exportService.start(projectId, request));
     }
 
     @GetMapping("/status/{jobId}")
-    public ResponseEntity<ExportResponse> getStatus(@PathVariable String jobId) {
+    public ResponseEntity<ExportResponse> status(@PathVariable String jobId) {
         return ResponseEntity.ok(exportService.getStatus(jobId));
     }
 
@@ -32,8 +33,9 @@ public class ExportController {
     public ResponseEntity<Resource> download(@PathVariable String jobId) {
         Resource resource = exportService.getDownloadResource(jobId);
         return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"final_output.mp4\"")
                 .contentType(MediaType.parseMediaType("video/mp4"))
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"narratemm-recap.mp4\"")
                 .body(resource);
     }
 

@@ -6,6 +6,8 @@ import com.narratemm.entity.User;
 import com.narratemm.repository.*;
 import com.narratemm.security.SecurityUtils;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
@@ -13,6 +15,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ProjectService {
 
     private final ProjectRepository projectRepository;
@@ -90,6 +93,14 @@ public class ProjectService {
         projectRepository.findById(projectId).ifPresent(p -> {
             p.setStatus(status);
             projectRepository.save(p);
+        });
+    }
+
+    public void updateVideoPath(String projectId, String videoPath) {
+        projectRepository.findById(projectId).ifPresent(p -> {
+            p.setVideoPath(videoPath);
+            projectRepository.save(p);
+            log.info("Updated videoPath for project {}: {}", projectId, videoPath);
         });
     }
 

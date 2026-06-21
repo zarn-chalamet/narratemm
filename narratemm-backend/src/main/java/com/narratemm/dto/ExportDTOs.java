@@ -7,13 +7,6 @@ public class ExportDTOs {
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
-    public static class StartRequest {
-        private ExportSettings settings;
-    }
-
-    @Data
-    @NoArgsConstructor
-    @AllArgsConstructor
     @Builder
     public static class ExportSettings {
         private String aspectRatio;
@@ -25,17 +18,25 @@ public class ExportDTOs {
         private String subtitleFont;
         private Integer subtitleSize;
         private Integer audioMix;
+        private String subtitleLanguage;
     }
 
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
+    public static class StartRequest {
+        private ExportSettings settings;
+    }
+
+    @Data
     @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class ExportResponse {
         private String id;
         private String projectId;
         private String status;
-        private Integer progress;
+        private int progress;
         private String outputPath;
         private String errorMessage;
         private String startedAt;
@@ -43,14 +44,14 @@ public class ExportDTOs {
     }
 
     @Data
+    @Builder
     @NoArgsConstructor
     @AllArgsConstructor
-    @Builder
     public static class ProgressUpdate {
         private String jobId;
         private String projectId;
         private String status;
-        private Integer progress;
+        private int progress;
         private String timestamp;
     }
 }

@@ -10,7 +10,7 @@ import { useProjectStore } from '../store/projectStore';
 import { transcriptService } from '../services/transcriptService';
 import { scriptService } from '../services/scriptService';
 import { voiceService } from '../services/voiceService';
-// import { exportService, type ExportSettings } from '../services/exportService';
+import { exportService, type ExportSettings } from '../services/exportService';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 
@@ -31,7 +31,16 @@ export const ProjectPage: React.FC = () => {
   const [transcript, setTranscript] = useState<any>(null);
   const [script, setScript] = useState<any>(null);
   const [voiceOver, setVoiceOver] = useState<any>(null);
-  const [exportSettings, setExportSettings] = useState<any>({ aspectRatio: '9:16', logoPosition: 'bottom-right', logoSize: 100, logoOpacity: 80, subtitleEnabled: true, subtitleFont: 'Noto Serif Myanmar', subtitleSize: 24, audioMix: 70 });
+  const [exportSettings, setExportSettings] = useState<any>({ 
+    aspectRatio: '9:16', 
+    logoPosition: 'bottom-right', 
+    logoSize: 100, 
+    logoOpacity: 80, 
+    subtitleEnabled: true, 
+    subtitleFont: 'Noto Serif Myanmar', 
+    subtitleSize: 24, 
+    audioMix: 70, 
+    subtitleLanguage: 'burmese', });
   const [exportJob, setExportJob] = useState<any>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   
@@ -93,12 +102,14 @@ export const ProjectPage: React.FC = () => {
             exportSettings={exportSettings}
             setExportSettings={setExportSettings}
             onNext={nextStep}
+            projectId={project.id}
           />
         );
       case 6:
         return (
           <Step6Export 
             project={project}
+            exportSettings={exportSettings}
             exportJob={exportJob}
             setExportJob={setExportJob}
             updateProgress={updateExportProgress}
@@ -561,8 +572,7 @@ const Step3Script: React.FC<{
         {isProcessing ? (
           <div className="flex items-center justify-center gap-2 text-violet-400">
             <Loader2 className="w-5 h-5 animate-spin" />
-            <span>Generating script with Gemini AI... 
-              Generating voice-over... This can take 2–5 minutes on free tier</span>
+            <span>Generating script with Gemini AI... </span>
           </div>
         ) : (
           <Button onClick={handleGenerate} leftIcon={<Wand2 className="w-4 h-4" />}>
@@ -782,17 +792,50 @@ const Step4VoiceOver: React.FC<{
   );
 };
 
-// Step 5: Edit Settings
+// Replace Step5Edit in ProjectPage.tsx
+
 const Step5Edit: React.FC<{
   exportSettings: any;
   setExportSettings: (s: any) => void;
   onNext: () => void;
-}> = ({ exportSettings, setExportSettings }) => {
+  projectId: string;
+}> = ({ exportSettings, setExportSettings, projectId }) => {
+
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ✅ Merge settings instead of replacing
+  const updateSetting = (key: string, value: any) => {
+    setExportSettings((prev: any) => ({ ...prev, [key]: value }));
+  };
+
   const positions = [
     'top-left', 'top-center', 'top-right',
     'center-left', 'center', 'center-right',
     'bottom-left', 'bottom-center', 'bottom-right',
   ];
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Show local preview immediately
+    const reader = new FileReader();
+    reader.onload = (ev) => setLogoPreview(ev.target?.result as string);
+    reader.readAsDataURL(file);
+
+    // Upload to backend
+    setIsUploadingLogo(true);
+    try {
+      const { logoPath } = await exportService.uploadLogo(projectId, file);
+      updateSetting('logoPath', logoPath);
+    } catch (err) {
+      console.error('Logo upload failed:', err);
+    } finally {
+      setIsUploadingLogo(false);
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -802,108 +845,178 @@ const Step5Edit: React.FC<{
       </div>
 
       <div className="grid md:grid-cols-2 gap-8">
-        {/* Left Column */}
+        {/* LEFT COLUMN */}
         <div className="space-y-6">
-          {/* Logo Watermark */}
+
+          {/* Logo Upload */}
           <div>
             <div className="flex items-center gap-2 mb-3">
               <ImageIcon className="w-5 h-5 text-gray-400" />
               <label className="text-sm font-medium text-gray-300">Logo Watermark</label>
             </div>
-            <div className="border-2 border-dashed border-[#2a2a3e] rounded-xl p-6 text-center hover:border-violet-500/50 cursor-pointer transition-colors">
-              <ImageIcon className="w-8 h-8 text-gray-500 mx-auto mb-2" />
-              <p className="text-sm text-gray-400">Click to upload PNG</p>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={handleLogoUpload}
+            />
+
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="border-2 border-dashed border-[#2a2a3e] rounded-xl p-6 text-center 
+                         hover:border-violet-500/50 cursor-pointer transition-colors relative"
+            >
+              {isUploadingLogo ? (
+                <div className="flex items-center justify-center gap-2 text-violet-400">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span className="text-sm">Uploading...</span>
+                </div>
+              ) : logoPreview ? (
+                <div className="flex flex-col items-center gap-2">
+                  <img
+                    src={logoPreview}
+                    alt="Logo preview"
+                    className="w-20 h-20 object-contain rounded-lg"
+                  />
+                  <span className="text-xs text-violet-400">Click to change</span>
+                </div>
+              ) : (
+                <>
+                  <ImageIcon className="w-8 h-8 text-gray-500 mx-auto mb-2" />
+                  <p className="text-sm text-gray-400">Click to upload PNG/JPG</p>
+                  <p className="text-xs text-gray-600 mt-1">Transparent PNG recommended</p>
+                </>
+              )}
             </div>
           </div>
 
-          {/* Logo Position */}
-          <div>
-            <label className="text-sm font-medium text-gray-300 mb-3 block">Position</label>
-            <div className="grid grid-cols-3 gap-2 max-w-[180px]">
-              {positions.map((pos) => (
-                <button
-                  key={pos}
-                  onClick={() => setExportSettings({ logoPosition: pos })}
-                  className={`w-12 h-12 rounded-lg border transition-all ${
-                    exportSettings.logoPosition === pos
-                      ? 'border-violet-500 bg-violet-500/20'
-                      : 'border-[#2a2a3e] hover:border-gray-600'
-                  }`}
-                >
-                  {exportSettings.logoPosition === pos && (
-                    <Check className="w-4 h-4 text-violet-400 mx-auto" />
-                  )}
-                </button>
-              ))}
+          {/* Logo Position Grid */}
+          {exportSettings.logoPath && (
+            <div>
+              <label className="text-sm font-medium text-gray-300 mb-3 block">
+                Watermark Position
+              </label>
+              <div className="grid grid-cols-3 gap-2 w-[180px]">
+                {positions.map((pos) => (
+                  <button
+                    key={pos}
+                    onClick={() => updateSetting('logoPosition', pos)}
+                    title={pos}
+                    className={`w-12 h-12 rounded-lg border transition-all flex items-center justify-center ${
+                      exportSettings.logoPosition === pos
+                        ? 'border-violet-500 bg-violet-500/20'
+                        : 'border-[#2a2a3e] hover:border-gray-600'
+                    }`}
+                  >
+                    {exportSettings.logoPosition === pos && (
+                      <Check className="w-4 h-4 text-violet-400" />
+                    )}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Logo Size & Opacity */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <div className="flex justify-between mb-2">
-                <label className="text-sm text-gray-400">Size</label>
-                <span className="text-sm text-violet-400">{exportSettings.logoSize}%</span>
+          {exportSettings.logoPath && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="flex justify-between mb-2">
+                  <label className="text-sm text-gray-400">Size</label>
+                  <span className="text-sm text-violet-400">{exportSettings.logoSize}%</span>
+                </div>
+                <input
+                  type="range" min="30" max="200"
+                  value={exportSettings.logoSize}
+                  onChange={(e) => updateSetting('logoSize', parseInt(e.target.value))}
+                  className="w-full accent-violet-500"
+                />
               </div>
-              <input
-                type="range"
-                min="50"
-                max="200"
-                value={exportSettings.logoSize}
-                onChange={(e) => setExportSettings({ logoSize: parseInt(e.target.value) })}
-                className="w-full accent-violet-500"
-              />
-            </div>
-            <div>
-              <div className="flex justify-between mb-2">
-                <label className="text-sm text-gray-400">Opacity</label>
-                <span className="text-sm text-violet-400">{exportSettings.logoOpacity}%</span>
+              <div>
+                <div className="flex justify-between mb-2">
+                  <label className="text-sm text-gray-400">Opacity</label>
+                  <span className="text-sm text-violet-400">{exportSettings.logoOpacity}%</span>
+                </div>
+                <input
+                  type="range" min="10" max="100"
+                  value={exportSettings.logoOpacity}
+                  onChange={(e) => updateSetting('logoOpacity', parseInt(e.target.value))}
+                  className="w-full accent-violet-500"
+                />
               </div>
-              <input
-                type="range"
-                min="20"
-                max="100"
-                value={exportSettings.logoOpacity}
-                onChange={(e) => setExportSettings({ logoOpacity: parseInt(e.target.value) })}
-                className="w-full accent-violet-500"
-              />
             </div>
-          </div>
+          )}
         </div>
 
-        {/* Right Column */}
+        {/* RIGHT COLUMN */}
         <div className="space-y-6">
-          {/* Subtitles */}
+
+          {/* Subtitles Toggle */}
           <div>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Type className="w-5 h-5 text-gray-400" />
-                <label className="text-sm font-medium text-gray-300">Subtitles</label>
+                <label className="text-sm font-medium text-gray-300">
+                  Subtitles (Burmese script)
+                </label>
               </div>
               <button
-                onClick={() => setExportSettings({ subtitleEnabled: !exportSettings.subtitleEnabled })}
-                className={`w-12 h-6 rounded-full transition-colors ${
+                onClick={() => updateSetting('subtitleEnabled', !exportSettings.subtitleEnabled)}
+                className={`w-12 h-6 rounded-full transition-colors relative ${
                   exportSettings.subtitleEnabled ? 'bg-violet-500' : 'bg-[#2a2a3e]'
                 }`}
               >
-                <div className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
                   exportSettings.subtitleEnabled ? 'translate-x-6' : 'translate-x-0.5'
                 }`} />
               </button>
             </div>
-            
+
             {exportSettings.subtitleEnabled && (
-              <div className="space-y-4 mt-4">
+              <div className="space-y-4 mt-4 p-4 bg-[#1a1a24] rounded-xl">
+                <p className="text-xs text-gray-500">
+                  Subtitles are generated from your Burmese script
+                </p>
+                <div>
+                  <label className="text-sm text-gray-400 mb-2 block">Subtitle Language</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { value: 'burmese', label: '🇲🇲 Burmese Script', desc: 'From your AI script' },
+                      { value: 'original', label: '🌐 Original', desc: 'From transcript' },
+                    ].map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => updateSetting('subtitleLanguage', opt.value)}
+                        className={`p-3 rounded-xl border text-left transition-all ${
+                          exportSettings.subtitleLanguage === opt.value
+                            ? 'border-violet-500 bg-violet-500/10'
+                            : 'border-[#2a2a3e] hover:border-gray-600'
+                        }`}
+                      >
+                        <span className={`text-sm font-medium block ${
+                          exportSettings.subtitleLanguage === opt.value
+                            ? 'text-violet-400' : 'text-white'
+                        }`}>
+                          {opt.label}
+                        </span>
+                        <span className="text-xs text-gray-500">{opt.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div>
                   <label className="text-sm text-gray-400 mb-2 block">Font</label>
                   <select
                     value={exportSettings.subtitleFont}
-                    onChange={(e) => setExportSettings({ subtitleFont: e.target.value })}
-                    className="w-full bg-[#1a1a24] border border-[#2a2a3e] rounded-lg px-3 py-2 text-white"
+                    onChange={(e) => updateSetting('subtitleFont', e.target.value)}
+                    className="w-full bg-[#0d0d14] border border-[#2a2a3e] rounded-lg px-3 py-2 text-white"
                   >
                     <option value="Noto Serif Myanmar">Noto Serif Myanmar</option>
                     <option value="Padauk">Padauk</option>
-                    <option value="Arial">Arial</option>
+                    <option value="Myanmar3">Myanmar3</option>
+                    <option value="Arial">Arial (Latin only)</option>
                   </select>
                 </div>
                 <div>
@@ -912,11 +1025,9 @@ const Step5Edit: React.FC<{
                     <span className="text-sm text-violet-400">{exportSettings.subtitleSize}px</span>
                   </div>
                   <input
-                    type="range"
-                    min="16"
-                    max="48"
+                    type="range" min="16" max="56"
                     value={exportSettings.subtitleSize}
-                    onChange={(e) => setExportSettings({ subtitleSize: parseInt(e.target.value) })}
+                    onChange={(e) => updateSetting('subtitleSize', parseInt(e.target.value))}
                     className="w-full accent-violet-500"
                   />
                 </div>
@@ -930,19 +1041,49 @@ const Step5Edit: React.FC<{
               <Sliders className="w-5 h-5 text-gray-400" />
               <label className="text-sm font-medium text-gray-300">Audio Mix</label>
             </div>
-            <div className="flex justify-between mb-2 text-sm">
-              <span className="text-gray-400">Original</span>
-              <span className="text-violet-400">{100 - exportSettings.audioMix}% / {exportSettings.audioMix}%</span>
-              <span className="text-gray-400">Voice-over</span>
+            <div className="flex justify-between mb-2 text-xs text-gray-400">
+              <span>🎬 Original Audio</span>
+              <span>🎙️ Voice-over</span>
             </div>
             <input
-              type="range"
-              min="0"
-              max="100"
+              type="range" min="0" max="100"
               value={exportSettings.audioMix}
-              onChange={(e) => setExportSettings({ audioMix: parseInt(e.target.value) })}
+              onChange={(e) => updateSetting('audioMix', parseInt(e.target.value))}
               className="w-full accent-violet-500"
             />
+            <div className="flex justify-between mt-1 text-xs">
+              <span className="text-gray-500">{100 - exportSettings.audioMix}%</span>
+              <span className="text-violet-400">{exportSettings.audioMix}%</span>
+            </div>
+          </div>
+
+          {/* Preview Card */}
+          <div className="bg-[#1a1a24] rounded-xl p-4">
+            <h4 className="text-sm font-medium text-white mb-3">Export Preview</h4>
+            <div className="space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Aspect Ratio</span>
+                <span className="text-white font-mono">{exportSettings.aspectRatio}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Subtitles</span>
+                <span className={exportSettings.subtitleEnabled ? 'text-green-400' : 'text-gray-500'}>
+                  {exportSettings.subtitleEnabled ? `✓ ${exportSettings.subtitleFont}` : 'Off'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Logo</span>
+                <span className={exportSettings.logoPath ? 'text-green-400' : 'text-gray-500'}>
+                  {exportSettings.logoPath ? `✓ ${exportSettings.logoPosition}` : 'None'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Audio Mix</span>
+                <span className="text-white">
+                  Orig {100 - exportSettings.audioMix}% / VO {exportSettings.audioMix}%
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -950,124 +1091,213 @@ const Step5Edit: React.FC<{
   );
 };
 
-// Step 6: Export
+//Step6Export in ProjectPage.tsx
 const Step6Export: React.FC<{
   project: any;
+  exportSettings: any;
   exportJob: any;
   setExportJob: (j: any) => void;
   updateProgress: (p: number) => void;
-}> = ({ project, exportJob, setExportJob, updateProgress }) => {
-  const handleStartExport = async () => {
-    setExportJob({
-      id: 'export-1',
-      projectId: project.id,
-      status: 'processing',
-      progress: 0,
-    });
+}> = ({ project, exportSettings, exportJob, setExportJob }) => {
 
-    // Simulate export progress
-    for (let i = 0; i <= 100; i += 2) {
-      await new Promise(r => setTimeout(r, 150));
-      updateProgress(i);
-    }
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    setExportJob({
-      id: 'export-1',
-      projectId: project.id,
-      status: 'done',
-      progress: 100,
-      outputPath: '/exports/final-video.mp4',
-    });
+  // Poll export status via REST (reliable fallback to WebSocket)
+  const startPolling = (jobId: string) => {
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await exportService.getStatus(jobId);
+        setExportJob(status);
+        if (status.status === 'done' || status.status === 'failed') {
+          clearInterval(pollRef.current!);
+        }
+      } catch (err) {
+        console.error('Poll error:', err);
+      }
+    }, 2000); // every 2 seconds
   };
 
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  const handleStartExport = async () => {
+
+    const settingsToSend: ExportSettings = {
+      aspectRatio: exportSettings.aspectRatio || project.aspectRatio || '9:16',
+      logoPath: exportSettings.logoPath,       // ✅ ADD THIS
+      logoPosition: exportSettings.logoPosition,
+      logoSize: exportSettings.logoSize,
+      logoOpacity: exportSettings.logoOpacity,
+      subtitleEnabled: exportSettings.subtitleEnabled,
+      subtitleFont: exportSettings.subtitleFont,
+      subtitleSize: exportSettings.subtitleSize,
+      audioMix: exportSettings.audioMix,
+      subtitleLanguage: exportSettings.subtitleLanguage || 'burmese',
+    };
+
+     // ✅ DEBUG - Check browser console after clicking Export
+    console.log('🎬 EXPORT SETTINGS:', settingsToSend);
+    console.log('🌐 Subtitle language:', settingsToSend.subtitleLanguage);
+
+
+    try {
+      const job = await exportService.start(project.id, settingsToSend);
+
+      setExportJob(job);
+      startPolling(job.id);
+
+    } catch (err: any) {
+      console.error('Export start failed:', err);
+      setExportJob({
+        status: 'failed',
+        progress: 0,
+        errorMessage: err.response?.data?.message || err.message || 'Export failed',
+      });
+    }
+  };
+
+  const handleDownload = () => {
+    if (!exportJob?.id) return;
+    const url = exportService.getDownloadUrl(exportJob.id);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${project.title || 'export'}.mp4`;
+    a.click();
+  };
+
+  // ── DONE ──
   if (exportJob?.status === 'done') {
     return (
       <div className="text-center py-8">
-        <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-green-500/20 flex items-center justify-center animate-pulse-glow">
+        <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-green-500/20 
+                        flex items-center justify-center">
           <Check className="w-12 h-12 text-green-400" />
         </div>
         <h2 className="text-2xl font-bold text-white mb-2">Export Complete! 🎉</h2>
-        <p className="text-gray-400 mb-8">Your video is ready to download and share</p>
-        
+        <p className="text-gray-400 mb-8">Your Burmese recap video is ready</p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-          <Button 
+          <Button
             size="lg"
+            onClick={handleDownload}
             leftIcon={<Download className="w-5 h-5" />}
           >
             Download MP4
           </Button>
-          <Button 
-            variant="outline"
-            size="lg"
-          >
-            Share to TikTok
+          <Button variant="outline" size="lg" onClick={() => setExportJob(null)}>
+            Export Again
           </Button>
         </div>
       </div>
     );
   }
 
+  // ── FAILED ──
+  if (exportJob?.status === 'failed') {
+    return (
+      <div className="text-center py-8">
+        <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-red-500/20 
+                        flex items-center justify-center">
+          <RefreshCw className="w-10 h-10 text-red-400" />
+        </div>
+        <h2 className="text-xl font-bold text-white mb-2">Export Failed</h2>
+        <p className="text-red-400 mb-6 max-w-md mx-auto text-sm">
+          {exportJob.errorMessage || 'Unknown error occurred'}
+        </p>
+        <Button onClick={() => setExportJob(null)} leftIcon={<RefreshCw className="w-4 h-4" />}>
+          Try Again
+        </Button>
+      </div>
+    );
+  }
+
+  // ── PROCESSING ──
   if (exportJob?.status === 'processing') {
     return (
       <div className="text-center py-8">
-        <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-yellow-500/20 flex items-center justify-center">
+        <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-yellow-500/20 
+                        flex items-center justify-center">
           <Loader2 className="w-10 h-10 text-yellow-400 animate-spin" />
         </div>
         <h2 className="text-xl font-bold text-white mb-2">Rendering Video...</h2>
-        <p className="text-gray-400 mb-6">This may take a few minutes. Don't close this page.</p>
-        
+        <p className="text-gray-400 mb-6">
+          FFmpeg is combining your video, voice-over, and subtitles
+        </p>
         <div className="max-w-md mx-auto">
           <div className="flex justify-between mb-2 text-sm">
             <span className="text-gray-400">Progress</span>
-            <span className="text-violet-400">{exportJob.progress}%</span>
+            <span className="text-violet-400 font-mono">{exportJob.progress}%</span>
           </div>
           <div className="h-3 bg-[#1a1a24] rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-gradient-to-r from-violet-500 to-purple-500 transition-all duration-300"
+            <div
+              className="h-full bg-gradient-to-r from-violet-500 to-purple-500 transition-all duration-500"
               style={{ width: `${exportJob.progress}%` }}
             />
           </div>
           <p className="text-xs text-gray-500 mt-3">
-            Applying subtitles, logo watermark, and mixing audio...
+            Burning Burmese subtitles + mixing audio + adding watermark...
           </p>
         </div>
       </div>
     );
   }
 
+  // ── READY TO EXPORT ──
   return (
     <div className="text-center py-8">
-      <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-orange-500/20 flex items-center justify-center">
+      <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-orange-500/20 
+                      flex items-center justify-center">
         <Download className="w-10 h-10 text-orange-400" />
       </div>
       <h2 className="text-xl font-bold text-white mb-2">Ready to Export</h2>
       <p className="text-gray-400 mb-8 max-w-md mx-auto">
-        Your video will be rendered with all settings applied. This process runs in the background using FFmpeg.
+        FFmpeg will combine your original video with the Burmese voice-over,
+        burn subtitles, and apply your watermark.
       </p>
-      
+
+      {/* Summary */}
       <div className="bg-[#1a1a24] rounded-xl p-4 max-w-sm mx-auto mb-8 text-left">
         <h3 className="font-medium text-white mb-3">Export Summary</h3>
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
-            <span className="text-gray-400">Format</span>
-            <span className="text-white">{project.aspectRatio}</span>
+            <span className="text-gray-400">Aspect Ratio</span>
+            <span className="text-white">
+              {exportSettings.aspectRatio || project.aspectRatio}
+            </span>
           </div>
           <div className="flex justify-between">
             <span className="text-gray-400">Subtitles</span>
-            <span className="text-white">Enabled</span>
+            <span className={exportSettings.subtitleEnabled ? 'text-green-400' : 'text-gray-500'}>
+              {exportSettings.subtitleEnabled
+                ? `✓ ${exportSettings.subtitleFont} ${exportSettings.subtitleSize}px`
+                : 'Disabled'}
+            </span>
           </div>
           <div className="flex justify-between">
-            <span className="text-gray-400">Voice-over</span>
-            <span className="text-white">Included</span>
+            <span className="text-gray-400">Watermark</span>
+            <span className={exportSettings.logoPath ? 'text-green-400' : 'text-gray-500'}>
+              {exportSettings.logoPath
+                ? `✓ ${exportSettings.logoPosition}`
+                : 'None'}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-400">Audio</span>
+            <span className="text-white">
+              Orig {100 - (exportSettings.audioMix || 70)}% 
+              / VO {exportSettings.audioMix || 70}%
+            </span>
           </div>
           <div className="flex justify-between">
             <span className="text-gray-400">Output</span>
-            <span className="text-white">MP4 (H.264)</span>
+            <span className="text-white">MP4 (H.264 + AAC)</span>
           </div>
         </div>
       </div>
-      
-      <Button 
+
+      <Button
         size="lg"
         onClick={handleStartExport}
         leftIcon={<Play className="w-5 h-5" />}

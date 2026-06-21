@@ -6,9 +6,13 @@ import com.narratemm.repository.ProjectRepository;
 import com.narratemm.security.SecurityUtils;
 import com.narratemm.service.StorageService;
 import lombok.RequiredArgsConstructor;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/upload")
@@ -55,7 +59,10 @@ public class UploadController {
                 .build());
     }
 
-    @PostMapping("/logo/{projectId}")
+    @PostMapping(
+        value = "/logo/{projectId}",
+        consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
     public ResponseEntity<LogoResponse> uploadLogo(
             @PathVariable String projectId,
             @RequestParam("logo") MultipartFile file) {
@@ -64,10 +71,29 @@ public class UploadController {
         projectRepository.findByIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new RuntimeException("Project not found"));
 
+        if (file == null || file.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Logo file is missing or empty"
+            );
+        }
+
+        String contentType = file.getContentType();
+        if (contentType == null ||
+                !(contentType.equals("image/png")
+                || contentType.equals("image/jpeg")
+                || contentType.equals("image/webp"))) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Invalid file type. Please upload PNG, JPG, or WEBP."
+            );
+        }
+
         String logoPath = storageService.saveLogoFile(projectId, file);
 
         return ResponseEntity.ok(LogoResponse.builder()
                 .logoPath(logoPath)
+                .message("Logo uploaded successfully")
                 .build());
     }
 }
