@@ -41,6 +41,9 @@ public class ExportService {
     @Value("${app.tools.fonts-dir:}")
     private String fontsDir;
 
+    // Max characters per subtitle line (Burmese is wide → keep short)
+    private static final int MAX_BURMESE_CHARS = 35;
+
     // atempo: 0.5 (slow) to 2.0 (fast) per filter instance
     // We chain filters for values outside this range
     private static final double TEMPO_TOLERANCE = 0.02; // 2% tolerance, skip adjustment
@@ -445,7 +448,7 @@ public class ExportService {
         }
 
         writeSrtWithBom(srtPath, srtContent);
-        log.info("✅ SRT written: {} ({} chars)", srtPath, srtContent.length());
+        log.info("SRT written: {} ({} chars)", srtPath, srtContent.length());
         return srtPath;
     }
 
@@ -460,47 +463,132 @@ public class ExportService {
      *
      * Result: subtitles appear exactly in sync with the tempo-adjusted voice.
      */
+
     private String generateBurmeseAlignedSrt(String script,
                                               double baseDuration,
                                               double tempoRatio) {
         String cleaned = cleanScript(script);
         if (cleaned.isEmpty()) return "";
 
+        // Split into sentences first
         String[] sentences = splitSentences(cleaned);
         if (sentences.length == 0) return "";
 
-        double timePerSentence = baseDuration / sentences.length;
+        // Further split into short chunks (max 35 chars each)
+        List<String> chunks = new ArrayList<>();
+        for (String sentence : sentences) {
+            chunks.addAll(splitIntoChunks(sentence, MAX_BURMESE_CHARS));
+        }
+
+        if (chunks.isEmpty()) return "";
+
+        log.info("Burmese SRT: {} sentences → {} chunks", sentences.length, chunks.size());
+
+        // Distribute time proportionally by character count (not equally)
+        int totalChars = chunks.stream().mapToInt(String::length).sum();
+        if (totalChars == 0) return "";
+
         StringBuilder srt = new StringBuilder();
         double cursor = 0.0;
         int index = 1;
 
-        for (String sentence : sentences) {
-            sentence = sentence.trim();
-            if (sentence.length() <= 1) continue;
+        for (String chunk : chunks) {
+            // Time proportional to chunk length
+            double chunkTime = baseDuration * ((double) chunk.length() / totalChars);
 
-            if (sentence.length() > 80) {
-                // Split long sentences at Burmese/Myanmar punctuation
-                String[] parts = sentence.split("(?<=[,၊،])\\s*");
-                double subTime = timePerSentence / Math.max(parts.length, 1);
+            // Minimum 1.2s per subtitle (readable), max 5s
+            chunkTime = Math.max(1.2, Math.min(5.0, chunkTime));
 
-                for (String part : parts) {
-                    part = part.trim();
-                    if (part.length() <= 1) continue;
+            double startRemapped = cursor / tempoRatio;
+            double endRemapped   = (cursor + chunkTime) / tempoRatio;
 
-                    double startRemapped = cursor / tempoRatio;
-                    double endRemapped   = (cursor + subTime) / tempoRatio;
-                    appendSrtEntry(srt, index++, startRemapped, endRemapped, part);
-                    cursor += subTime;
-                }
-            } else {
-                double startRemapped = cursor / tempoRatio;
-                double endRemapped   = (cursor + timePerSentence) / tempoRatio;
-                appendSrtEntry(srt, index++, startRemapped, endRemapped, sentence);
-                cursor += timePerSentence;
-            }
+            appendSrtEntry(srt, index++, startRemapped, endRemapped, chunk);
+            cursor += chunkTime;
         }
 
         return srt.toString();
+    }
+
+    /**
+     * Split a sentence into chunks ≤ maxLen characters.
+     * Prefers breaking at Burmese punctuation (၊ ။ ,), then spaces.
+     */
+    private List<String> splitIntoChunks(String text, int maxLen) {
+        List<String> chunks = new ArrayList<>();
+        text = text.trim();
+        if (text.isEmpty()) return chunks;
+
+        // Short enough → return as-is
+        if (text.length() <= maxLen) {
+            chunks.add(text);
+            return chunks;
+        }
+
+        // Try splitting at Burmese punctuation first
+        String[] segments = text.split("(?<=[၊။,])\\s*");
+
+        StringBuilder current = new StringBuilder();
+        for (String seg : segments) {
+            seg = seg.trim();
+            if (seg.isEmpty()) continue;
+
+            if (current.length() + seg.length() + 1 <= maxLen) {
+                if (current.length() > 0) current.append(" ");
+                current.append(seg);
+            } else {
+                // Flush current
+                if (current.length() > 0) {
+                    chunks.add(current.toString().trim());
+                    current.setLength(0);
+                }
+
+                // Segment itself is too long → break at spaces
+                if (seg.length() > maxLen) {
+                    chunks.addAll(breakAtSpaces(seg, maxLen));
+                } else {
+                    current.append(seg);
+                }
+            }
+        }
+
+        if (current.length() > 0) {
+            chunks.add(current.toString().trim());
+        }
+
+        return chunks;
+    }
+
+    /**
+     * Hard-break long text at word boundaries (spaces).
+     */
+    private List<String> breakAtSpaces(String text, int maxLen) {
+        List<String> result = new ArrayList<>();
+        String[] words = text.split("\\s+");
+        StringBuilder current = new StringBuilder();
+
+        for (String word : words) {
+            if (current.length() + word.length() + 1 <= maxLen) {
+                if (current.length() > 0) current.append(" ");
+                current.append(word);
+            } else {
+                if (current.length() > 0) {
+                    result.add(current.toString().trim());
+                    current.setLength(0);
+                }
+                // Single word longer than maxLen → just push it (rare for Burmese)
+                if (word.length() > maxLen) {
+                    result.add(word);
+                } else {
+                    current.append(word);
+                }
+            }
+        }
+
+        if (current.length() > 0) {
+            result.add(current.toString().trim());
+        }
+
+        return result;
     }
 
     /**
@@ -588,7 +676,7 @@ public class ExportService {
 
         String lastV = "scaled";
 
-        // 2. Subtitles
+                // 2. Subtitles
         if (hasSrt) {
             String srtForFilter = normalizePath(srtPath)
                     .replace("\\", "/")
@@ -596,22 +684,36 @@ public class ExportService {
 
             String font     = (settings.getSubtitleFont() != null
                     && !settings.getSubtitleFont().isBlank())
-                    ? settings.getSubtitleFont() : "Myanmar Text";
+                    ? settings.getSubtitleFont() : "Pyidaungsu";
             int    fontSize = settings.getSubtitleSize() != null
-                    ? settings.getSubtitleSize() : 24;
+                    ? settings.getSubtitleSize() : 22;
+
+            int videoWidth  = Integer.parseInt(w);
+            int videoHeight = Integer.parseInt(h);
+
+            // Margin in libass coordinate system 
+            // (we force PlayResY = video height below, so this is pixels)
+            int marginV = Math.max(60, (int) (videoHeight * 0.06));  // 6% from bottom
+            int marginH = (int) (videoWidth * 0.04);                 // 4% side margin
 
             filter.append(";[").append(lastV).append("]")
                   .append("subtitles=filename='").append(srtForFilter).append("'")
+                  // CRITICAL: Force libass play-resolution to match video
+                  .append(":original_size=").append(videoWidth).append("x").append(videoHeight)
                   .append(":force_style='")
                   .append("FontName=").append(font).append(",")
                   .append("FontSize=").append(fontSize).append(",")
                   .append("PrimaryColour=&H00FFFFFF,")
                   .append("OutlineColour=&H00000000,")
+                  .append("BackColour=&H80000000,")
                   .append("BorderStyle=1,")
                   .append("Outline=2,")
-                  .append("Shadow=0,")
-                  .append("MarginV=30,")
-                  .append("Alignment=2")
+                  .append("Shadow=1,")
+                  .append("MarginV=").append(marginV).append(",")
+                  .append("MarginL=").append(marginH).append(",")
+                  .append("MarginR=").append(marginH).append(",")
+                  .append("Alignment=2,")        // 2 = bottom-center
+                  .append("WrapStyle=2")          // 2 = no automatic wrapping (we pre-split)
                   .append("'[subtitled]");
             lastV = "subtitled";
         }
@@ -750,9 +852,33 @@ public class ExportService {
     // ─────────────────────────────────────────────────────────────────────────
 
     private String cleanScript(String script) {
+        if (script == null) return "";
+
         return script
-                .replaceAll("(?m)^\\s*\\.\\s*$", "")
-                .replaceAll("(?m)^\\s*$\\n", "")
+                // Remove markdown headers like **[Hook]**, **Setup:**, [Cliffhanger]
+                .replaceAll("\\*{1,3}\\[[^\\]]+\\]\\*{1,3}", "")
+                .replaceAll("\\*{1,3}[A-Za-z][^*\\n:]{0,30}:\\*{1,3}", "")
+                .replaceAll("\\[[A-Za-z][^\\]]{0,40}\\]", "")
+                // Remove markdown bold/italic markers
+                .replaceAll("\\*{1,3}", "")
+                .replaceAll("_{2,3}", "")
+                // Remove emojis (broad Unicode emoji ranges)
+                .replaceAll("[\\p{So}\\p{Cn}]", "")
+                .replaceAll("[\\x{1F300}-\\x{1F9FF}]", "")
+                .replaceAll("[\\x{2600}-\\x{27BF}]", "")
+                .replaceAll("[\\x{1F000}-\\x{1F02F}]", "")
+                .replaceAll("[\\x{1F0A0}-\\x{1F0FF}]", "")
+                .replaceAll("[\\x{1F100}-\\x{1F1FF}]", "")
+                .replaceAll("[\\x{1F200}-\\x{1F2FF}]", "")
+                // Remove standalone dots/dashes on their own line
+                .replaceAll("(?m)^\\s*[\\.\\-_=]+\\s*$", "")
+                // Remove "..." (ellipsis used for dramatic pauses)
+                .replaceAll("\\.{3,}", " ")
+                .replaceAll("…", " ")
+                // Collapse multiple spaces/newlines
+                .replaceAll("[ \\t]+", " ")
+                .replaceAll("\\n{2,}", "\n")
+                .replaceAll("(?m)^\\s+|\\s+$", "")
                 .trim();
     }
 

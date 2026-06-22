@@ -103,6 +103,7 @@ export const ProjectPage: React.FC = () => {
             setExportSettings={setExportSettings}
             onNext={nextStep}
             projectId={project.id}
+            script={script}
           />
         );
       case 6:
@@ -792,23 +793,97 @@ const Step4VoiceOver: React.FC<{
   );
 };
 
-// Replace Step5Edit in ProjectPage.tsx
+//Step 5 Edit
+
+// ─────────────────────────────────────────────────────────────────────────
+// FONT SIZE RECOMMENDATIONS PER ASPECT RATIO
+// ─────────────────────────────────────────────────────────────────────────
+const FONT_SIZE_RECOMMENDATIONS: Record<string, { 
+  min: number; max: number; recommended: number; reason: string 
+}> = {
+  '9:16':  { min: 18, max: 32, recommended: 22, reason: 'TikTok/Reels - vertical, mobile-first' },
+  '4:5':   { min: 20, max: 36, recommended: 26, reason: 'Instagram feed - balanced readability' },
+  '1:1':   { min: 22, max: 38, recommended: 28, reason: 'Square - centered focus' },
+  '16:9':  { min: 24, max: 48, recommended: 32, reason: 'YouTube/landscape - wider canvas' },
+};
 
 const Step5Edit: React.FC<{
   exportSettings: any;
   setExportSettings: (s: any) => void;
   onNext: () => void;
   projectId: string;
-}> = ({ exportSettings, setExportSettings, projectId }) => {
+  script: any;
+}> = ({ exportSettings, setExportSettings, projectId, script }) => {
 
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ✅ Merge settings instead of replacing
   const updateSetting = (key: string, value: any) => {
     setExportSettings((prev: any) => ({ ...prev, [key]: value }));
   };
+
+  // Get a meaningful preview line from the actual script
+  const getPreviewText = (): string => {
+    const fallbacks: Record<string, string> = {
+      burmese:  'ဤသည် စာတမ်းထိုး နမူနာ ဖြစ်ပါသည်။',
+      original: 'This is a sample subtitle preview.',
+    };
+
+    const lang = exportSettings.subtitleLanguage || 'burmese';
+
+    if (script?.content) {
+      const cleaned = script.content
+        .replace(/^\s*[\.\*\-#]+\s*/gm, '')
+        .replace(/\n+/g, ' ')
+        .trim();
+
+      const match = cleaned.match(/^[^။.!?]{10,80}[။.!?]/);
+      if (match) {
+        return match[0].trim();
+      }
+
+      if (cleaned.length > 10) {
+        return cleaned.slice(0, 60).trim() + (cleaned.length > 60 ? '…' : '');
+      }
+    }
+
+    return fallbacks[lang] || fallbacks.burmese;
+  };
+
+  const previewText = getPreviewText();
+
+  // Get current recommendation based on aspect ratio
+  const currentRatio = exportSettings.aspectRatio || '9:16';
+  const fontRec = FONT_SIZE_RECOMMENDATIONS[currentRatio] || FONT_SIZE_RECOMMENDATIONS['9:16'];
+
+  // ✅ Track previous aspect ratio to detect changes (no setState in effect)
+  const prevRatioRef = useRef(currentRatio);
+
+  useEffect(() => {
+    // Only run when aspect ratio actually changes (not on mount)
+    if (prevRatioRef.current === currentRatio) return;
+    prevRatioRef.current = currentRatio;
+
+    const rec = FONT_SIZE_RECOMMENDATIONS[currentRatio];
+    if (!rec) return;
+
+    const currentSize = exportSettings.subtitleSize || 24;
+    if (currentSize < rec.min || currentSize > rec.max) {
+      // Defer state update to next tick to avoid cascading renders
+      queueMicrotask(() => updateSetting('subtitleSize', rec.recommended));
+    }
+  }, [currentRatio]);
+
+  // Quality indicator for current size
+  const getSizeQuality = (size: number) => {
+    if (size === fontRec.recommended) return { label: '⭐ Recommended', color: 'text-green-400' };
+    if (size >= fontRec.min && size <= fontRec.max) return { label: '✓ Good', color: 'text-blue-400' };
+    if (size < fontRec.min) return { label: '⚠️ Too small', color: 'text-yellow-400' };
+    return { label: '⚠️ Too large', color: 'text-orange-400' };
+  };
+
+  const sizeQuality = getSizeQuality(exportSettings.subtitleSize || 24);
 
   const positions = [
     'top-left', 'top-center', 'top-right',
@@ -820,12 +895,10 @@ const Step5Edit: React.FC<{
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Show local preview immediately
     const reader = new FileReader();
     reader.onload = (ev) => setLogoPreview(ev.target?.result as string);
     reader.readAsDataURL(file);
 
-    // Upload to backend
     setIsUploadingLogo(true);
     try {
       const { logoPath } = await exportService.uploadLogo(projectId, file);
@@ -847,7 +920,6 @@ const Step5Edit: React.FC<{
       <div className="grid md:grid-cols-2 gap-8">
         {/* LEFT COLUMN */}
         <div className="space-y-6">
-
           {/* Logo Upload */}
           <div>
             <div className="flex items-center gap-2 mb-3">
@@ -892,7 +964,7 @@ const Step5Edit: React.FC<{
             </div>
           </div>
 
-          {/* Logo Position Grid */}
+          {/* Logo Position */}
           {exportSettings.logoPath && (
             <div>
               <label className="text-sm font-medium text-gray-300 mb-3 block">
@@ -952,7 +1024,6 @@ const Step5Edit: React.FC<{
 
         {/* RIGHT COLUMN */}
         <div className="space-y-6">
-
           {/* Subtitles Toggle */}
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -979,6 +1050,8 @@ const Step5Edit: React.FC<{
                 <p className="text-xs text-gray-500">
                   Subtitles are generated from your Burmese script
                 </p>
+
+                {/* Language */}
                 <div>
                   <label className="text-sm text-gray-400 mb-2 block">Subtitle Language</label>
                   <div className="grid grid-cols-2 gap-3">
@@ -1006,6 +1079,8 @@ const Step5Edit: React.FC<{
                     ))}
                   </div>
                 </div>
+
+                {/* Font */}
                 <div>
                   <label className="text-sm text-gray-400 mb-2 block">Font</label>
                   <select
@@ -1015,21 +1090,121 @@ const Step5Edit: React.FC<{
                   >
                     <option value="Noto Serif Myanmar">Noto Serif Myanmar</option>
                     <option value="Padauk">Padauk</option>
+                    <option value="Pyidaungsu">Pyidaungsu</option>
                     <option value="Myanmar3">Myanmar3</option>
                     <option value="Arial">Arial (Latin only)</option>
                   </select>
                 </div>
+
+                {/* SMART FONT SIZE */}
                 <div>
-                  <div className="flex justify-between mb-2">
+                  <div className="flex justify-between items-center mb-2">
                     <label className="text-sm text-gray-400">Size</label>
-                    <span className="text-sm text-violet-400">{exportSettings.subtitleSize}px</span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-medium ${sizeQuality.color}`}>
+                        {sizeQuality.label}
+                      </span>
+                      <span className="text-sm text-violet-400 font-mono">
+                        {exportSettings.subtitleSize}px
+                      </span>
+                    </div>
                   </div>
-                  <input
-                    type="range" min="16" max="56"
-                    value={exportSettings.subtitleSize}
-                    onChange={(e) => updateSetting('subtitleSize', parseInt(e.target.value))}
-                    className="w-full accent-violet-500"
-                  />
+
+                  <div className="relative">
+                    <input
+                      type="range"
+                      min={fontRec.min - 4}
+                      max={fontRec.max + 8}
+                      value={exportSettings.subtitleSize}
+                      onChange={(e) => updateSetting('subtitleSize', parseInt(e.target.value))}
+                      className="w-full accent-violet-500"
+                    />
+                    <div className="relative h-1 -mt-1">
+                      <div 
+                        className="absolute w-0.5 h-3 bg-green-400"
+                        style={{
+                          left: `${((fontRec.recommended - (fontRec.min - 4)) / ((fontRec.max + 8) - (fontRec.min - 4))) * 100}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>{fontRec.min - 4}px</span>
+                    <span className="text-green-400">⭐ {fontRec.recommended}px</span>
+                    <span>{fontRec.max + 8}px</span>
+                  </div>
+
+                  {/* Recommendation banner */}
+                  <div className="mt-3 p-3 bg-gradient-to-r from-violet-500/10 to-purple-500/10 
+                                  border border-violet-500/20 rounded-lg">
+                    <div className="flex items-start gap-2">
+                      <span className="text-violet-400 text-sm">💡</span>
+                      <div className="flex-1">
+                        <p className="text-xs text-gray-300">
+                          <span className="text-violet-400 font-medium">{currentRatio}</span> recommended:{' '}
+                          <span className="text-white font-mono">{fontRec.min}–{fontRec.max}px</span>{' '}
+                          (ideal: <span className="text-green-400">{fontRec.recommended}px</span>)
+                        </p>
+                        <p className="text-xs text-gray-500 mt-1">{fontRec.reason}</p>
+                      </div>
+                      {exportSettings.subtitleSize !== fontRec.recommended && (
+                        <button
+                          onClick={() => updateSetting('subtitleSize', fontRec.recommended)}
+                          className="text-xs px-2 py-1 bg-violet-500/20 text-violet-400 
+                                     hover:bg-violet-500/30 rounded-md transition-colors whitespace-nowrap"
+                        >
+                          Use {fontRec.recommended}px
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Live preview using REAL script content */}
+                  <div className="mt-3 p-4 bg-[#0d0d14] border border-[#2a2a3e] rounded-lg">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs text-gray-500">
+                        {script?.content ? 'Live Preview (from your script)' : 'Preview (sample text)'}
+                      </p>
+                      <span className="text-xs text-gray-600 font-mono">
+                        {exportSettings.subtitleSize}px
+                      </span>
+                    </div>
+
+                    {/* Simulated video frame */}
+                    <div 
+                      className="relative bg-gradient-to-br from-gray-800 to-gray-900 rounded-md 
+                                 overflow-hidden mx-auto" 
+                      style={{ 
+                        aspectRatio: exportSettings.aspectRatio?.replace(':', '/') || '9/16',
+                        maxHeight: '200px',
+                        maxWidth: '100%',
+                      }}
+                    >
+                      <div className="absolute inset-0 flex items-center justify-center text-gray-700 text-xs">
+                        🎬 Video Area
+                      </div>
+
+                      <div className="absolute bottom-3 left-2 right-2 text-center">
+                        <p 
+                          className="text-white inline-block px-2 py-1 leading-tight"
+                          style={{ 
+                            fontSize: `${Math.min(exportSettings.subtitleSize * 0.35, 16)}px`,
+                            fontFamily: exportSettings.subtitleFont,
+                            textShadow: '1px 1px 2px black, -1px -1px 2px black, 1px -1px 2px black, -1px 1px 2px black',
+                          }}
+                        >
+                          {previewText}
+                        </p>
+                      </div>
+                    </div>
+
+                    {!script?.content && (
+                      <p className="text-xs text-yellow-500/70 mt-2 text-center">
+                        💡 Generate a script in Step 3 to see real preview
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -1068,7 +1243,9 @@ const Step5Edit: React.FC<{
               <div className="flex justify-between">
                 <span className="text-gray-400">Subtitles</span>
                 <span className={exportSettings.subtitleEnabled ? 'text-green-400' : 'text-gray-500'}>
-                  {exportSettings.subtitleEnabled ? `✓ ${exportSettings.subtitleFont}` : 'Off'}
+                  {exportSettings.subtitleEnabled
+                    ? `✓ ${exportSettings.subtitleFont} ${exportSettings.subtitleSize}px`
+                    : 'Off'}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -1091,7 +1268,7 @@ const Step5Edit: React.FC<{
   );
 };
 
-//Step6Export in ProjectPage.tsx
+//Step6Export
 const Step6Export: React.FC<{
   project: any;
   exportSettings: any;
@@ -1101,8 +1278,9 @@ const Step6Export: React.FC<{
 }> = ({ project, exportSettings, exportJob, setExportJob }) => {
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
+  const [elapsedTime, setElapsedTime] = useState(0);
 
-  // Poll export status via REST (reliable fallback to WebSocket)
   const startPolling = (jobId: string) => {
     pollRef.current = setInterval(async () => {
       try {
@@ -1114,8 +1292,31 @@ const Step6Export: React.FC<{
       } catch (err) {
         console.error('Poll error:', err);
       }
-    }, 2000); // every 2 seconds
+    }, 2000);
   };
+
+  // Elapsed time counter
+  const isActiveRef = useRef(false);
+  
+  useEffect(() => {
+    const shouldRun = exportJob?.status === 'processing' || isStarting;
+    
+    // Reset to 0 when stopping (deferred to avoid cascading render)
+    if (!shouldRun) {
+      if (isActiveRef.current) {
+        isActiveRef.current = false;
+        queueMicrotask(() => setElapsedTime(0));
+      }
+      return;
+    }
+    
+    isActiveRef.current = true;
+    const timer = setInterval(() => {
+      setElapsedTime((t) => t + 1);
+    }, 1000);
+    
+    return () => clearInterval(timer);
+  }, [exportJob?.status, isStarting]);
 
   useEffect(() => {
     return () => {
@@ -1123,11 +1324,18 @@ const Step6Export: React.FC<{
     };
   }, []);
 
+  const formatElapsed = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+
   const handleStartExport = async () => {
+    setIsStarting(true);
 
     const settingsToSend: ExportSettings = {
       aspectRatio: exportSettings.aspectRatio || project.aspectRatio || '9:16',
-      logoPath: exportSettings.logoPath,       // ✅ ADD THIS
+      logoPath: exportSettings.logoPath,
       logoPosition: exportSettings.logoPosition,
       logoSize: exportSettings.logoSize,
       logoOpacity: exportSettings.logoOpacity,
@@ -1138,17 +1346,12 @@ const Step6Export: React.FC<{
       subtitleLanguage: exportSettings.subtitleLanguage || 'burmese',
     };
 
-     // ✅ DEBUG - Check browser console after clicking Export
     console.log('🎬 EXPORT SETTINGS:', settingsToSend);
-    console.log('🌐 Subtitle language:', settingsToSend.subtitleLanguage);
-
 
     try {
       const job = await exportService.start(project.id, settingsToSend);
-
       setExportJob(job);
       startPolling(job.id);
-
     } catch (err: any) {
       console.error('Export start failed:', err);
       setExportJob({
@@ -1156,6 +1359,8 @@ const Step6Export: React.FC<{
         progress: 0,
         errorMessage: err.response?.data?.message || err.message || 'Export failed',
       });
+    } finally {
+      setIsStarting(false);
     }
   };
 
@@ -1213,32 +1418,99 @@ const Step6Export: React.FC<{
     );
   }
 
-  // ── PROCESSING ──
-  if (exportJob?.status === 'processing') {
+  // ── PROCESSING (includes both isStarting and actual processing) ──
+  if (isStarting || exportJob?.status === 'processing') {
+    const progress = exportJob?.progress ?? 0;
+    const isInitializing = isStarting && !exportJob;
+
     return (
       <div className="text-center py-8">
-        <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-yellow-500/20 
-                        flex items-center justify-center">
-          <Loader2 className="w-10 h-10 text-yellow-400 animate-spin" />
+        <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-violet-500/20 
+                        flex items-center justify-center relative">
+          <Loader2 className="w-10 h-10 text-violet-400 animate-spin" />
         </div>
-        <h2 className="text-xl font-bold text-white mb-2">Rendering Video...</h2>
-        <p className="text-gray-400 mb-6">
-          FFmpeg is combining your video, voice-over, and subtitles
+        
+        <h2 className="text-xl font-bold text-white mb-2">
+          {isInitializing ? 'Initializing Export...' : 'Rendering Video...'}
+        </h2>
+        
+        <p className="text-gray-400 mb-2">
+          {isInitializing
+            ? 'Preparing FFmpeg pipeline and resources'
+            : 'FFmpeg is combining your video, voice-over, and subtitles'}
         </p>
+
+        <p className="text-xs text-yellow-400/80 mb-6 max-w-md mx-auto">
+          ⏱️ This typically takes 2–5 minutes depending on video length.
+          Please keep this tab open.
+        </p>
+
         <div className="max-w-md mx-auto">
           <div className="flex justify-between mb-2 text-sm">
-            <span className="text-gray-400">Progress</span>
-            <span className="text-violet-400 font-mono">{exportJob.progress}%</span>
+            <span className="text-gray-400">
+              {isInitializing ? 'Status' : 'Progress'}
+            </span>
+            <span className="text-violet-400 font-mono">
+              {isInitializing ? 'Starting...' : `${progress}%`}
+            </span>
           </div>
+
           <div className="h-3 bg-[#1a1a24] rounded-full overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-violet-500 to-purple-500 transition-all duration-500"
-              style={{ width: `${exportJob.progress}%` }}
-            />
+            {isInitializing ? (
+              <div className="h-full bg-gradient-to-r from-violet-500 via-purple-500 to-violet-500 
+                              animate-pulse" style={{ width: '100%' }} />
+            ) : (
+              <div
+                className="h-full bg-gradient-to-r from-violet-500 to-purple-500 transition-all duration-500"
+                style={{ width: `${progress}%` }}
+              />
+            )}
           </div>
-          <p className="text-xs text-gray-500 mt-3">
-            Burning Burmese subtitles + mixing audio + adding watermark...
-          </p>
+
+          <div className="flex justify-between items-center mt-3 text-xs">
+            <span className="text-gray-500">
+              Elapsed: <span className="text-violet-400 font-mono">{formatElapsed(elapsedTime)}</span>
+            </span>
+            <span className="text-gray-500">
+              {isInitializing
+                ? '🚀 Booting render engine'
+                : progress < 20
+                  ? '📥 Loading source video'
+                  : progress < 50
+                    ? '🎙️ Mixing voice-over'
+                    : progress < 80
+                      ? '📝 Burning subtitles'
+                      : '✨ Finalizing output'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-4 gap-2 mt-6">
+            {[
+              { label: 'Init', threshold: 0,  icon: '⚙️' },
+              { label: 'Audio', threshold: 25, icon: '🎵' },
+              { label: 'Subs', threshold: 50, icon: '💬' },
+              { label: 'Render', threshold: 75, icon: '🎬' },
+            ].map((stage) => {
+              const reached = !isInitializing && progress >= stage.threshold;
+              return (
+                <div
+                  key={stage.label}
+                  className={`p-2 rounded-lg border text-center transition-all ${
+                    reached
+                      ? 'border-violet-500/50 bg-violet-500/10'
+                      : 'border-[#2a2a3e] bg-[#1a1a24]'
+                  }`}
+                >
+                  <div className={`text-lg mb-1 ${reached ? '' : 'opacity-30'}`}>
+                    {stage.icon}
+                  </div>
+                  <div className={`text-xs ${reached ? 'text-violet-400' : 'text-gray-600'}`}>
+                    {stage.label}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     );
@@ -1257,7 +1529,6 @@ const Step6Export: React.FC<{
         burn subtitles, and apply your watermark.
       </p>
 
-      {/* Summary */}
       <div className="bg-[#1a1a24] rounded-xl p-4 max-w-sm mx-auto mb-8 text-left">
         <h3 className="font-medium text-white mb-3">Export Summary</h3>
         <div className="space-y-2 text-sm">
@@ -1297,10 +1568,18 @@ const Step6Export: React.FC<{
         </div>
       </div>
 
+      <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3 
+                      max-w-sm mx-auto mb-6">
+        <p className="text-xs text-yellow-400">
+          ⚠️ Export takes 2–5 minutes. Don't close this tab.
+        </p>
+      </div>
+
       <Button
         size="lg"
         onClick={handleStartExport}
         leftIcon={<Play className="w-5 h-5" />}
+        disabled={isStarting}
       >
         Start Export
       </Button>
