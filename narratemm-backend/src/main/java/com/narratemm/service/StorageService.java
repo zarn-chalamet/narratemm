@@ -23,30 +23,50 @@ public class StorageService {
 
     public String saveVideoFile(String projectId, MultipartFile file) {
         try {
-            Path dir = Paths.get(basePath, "projects", projectId);
+            Path dir = Paths.get(basePath, "projects", projectId).toAbsolutePath();
             Files.createDirectories(dir);
 
             String extension = getExtension(file.getOriginalFilename());
             Path filePath = dir.resolve("source." + extension);
-            file.transferTo(filePath.toFile());
+            
+            Files.copy(
+                file.getInputStream(),
+                filePath,
+                StandardCopyOption.REPLACE_EXISTING
+            );
 
             return filePath.toString();
         } catch (IOException e) {
-            throw new RuntimeException("Failed to save video file", e);
+            e.printStackTrace();
+            throw new RuntimeException("Failed to save video file: " + e.getMessage(), e);
         }
     }
 
     public String saveLogoFile(String projectId, MultipartFile file) {
         try {
-            Path dir = Paths.get(basePath, "projects", projectId);
+            Path dir = Paths.get(basePath, "projects", projectId).toAbsolutePath();
             Files.createDirectories(dir);
 
             Path filePath = dir.resolve("logo.png");
-            file.transferTo(filePath.toFile());
+            
+            System.out.println(" Saving logo to: " + filePath);
+            System.out.println(" Directory exists? " + Files.exists(dir));
+            System.out.println(" Directory writable? " + Files.isWritable(dir));
 
+            //  Use Files.copy instead of transferTo (more reliable)
+            Files.copy(
+                file.getInputStream(),
+                filePath,
+                StandardCopyOption.REPLACE_EXISTING
+            );
+
+            System.out.println(" Logo saved successfully: " + filePath);
             return filePath.toString();
         } catch (IOException e) {
-            throw new RuntimeException("Failed to save logo file", e);
+            //  Log the REAL error
+            System.err.println(" FAILED TO SAVE LOGO:");
+            e.printStackTrace();
+            throw new RuntimeException("Failed to save logo file: " + e.getMessage(), e);
         }
     }
 

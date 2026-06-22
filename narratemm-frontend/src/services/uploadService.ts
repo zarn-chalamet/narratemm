@@ -15,9 +15,7 @@ export const uploadService = {
     formData.append('file', file);
     formData.append('projectId', projectId);
 
-    const response = await api.post<UploadResponse>('/upload/file', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    const response = await api.post<UploadResponse>('/upload/file', formData);
     return response.data;
   },
 
@@ -32,9 +30,11 @@ export const uploadService = {
   uploadLogo: async (projectId: string, file: File): Promise<{ logoPath: string }> => {
     const formData = new FormData();
     formData.append('logo', file);
-    const response = await api.post<{ logoPath: string }>(`/upload/logo/${projectId}`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+
+    const response = await api.post<{ logoPath: string }>(
+      `/upload/logo/${projectId}`, 
+      formData
+    );
     return response.data;
   },
 };

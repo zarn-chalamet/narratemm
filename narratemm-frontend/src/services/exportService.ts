@@ -51,14 +51,14 @@ export const exportService = {
   },
 
   uploadLogo: async (
-    projectId: string,
+    projectId: string, 
     file: File
-  ): Promise<LogoUploadResponse> => {
+  ): Promise<{ logoPath: string }> => {
     const formData = new FormData();
     formData.append('logo', file);
-
-    const response = await api.post<LogoUploadResponse>(
-      `/upload/logo/${projectId}`,
+    
+    const response = await api.post<{ logoPath: string }>(
+      `/upload/logo/${projectId}`, 
       formData
     );
     return response.data;
