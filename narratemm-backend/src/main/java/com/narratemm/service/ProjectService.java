@@ -104,6 +104,14 @@ public class ProjectService {
         });
     }
 
+    public void updateDurationSeconds(String projectId, int durationSeconds) {
+        projectRepository.findById(projectId).ifPresent(p -> {
+            p.setDurationSeconds(durationSeconds);
+            projectRepository.save(p);
+            log.info("Updated durationSeconds for project {}: {}s", projectId, durationSeconds);
+        });
+    }
+
     private ProjectResponse toResponse(Project p) {
         return ProjectResponse.builder()
                 .id(p.getId())

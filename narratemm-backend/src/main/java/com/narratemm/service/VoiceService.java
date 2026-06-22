@@ -8,13 +8,17 @@ import com.narratemm.repository.ScriptRepository;
 import com.narratemm.repository.VoiceOverRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Map;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -27,6 +31,9 @@ public class VoiceService {
     private final EdgeTTSService edgeTTSService;
     private final StorageService storageService;
 
+    @Value("${app.tools.ffprobe-path:ffprobe}")
+    private String ffprobePath;
+
     public VoiceResponse generate(String projectId, GenerateRequest request) {
 
         Project project = projectService.getProjectEntity(projectId);
@@ -37,22 +44,36 @@ public class VoiceService {
                         "Script not found. Please generate script first."));
 
         try {
-            // Get language: request first, then project, then default to myanmar
             String language = request.getLanguage() != null
-                    ? request.getLanguage()
-                    :"myanmar";
+                    ? request.getLanguage() : "myanmar";
 
-            log.info("Generating voice for project {} | language={}", projectId, language);
+            double speed = request.getSpeed() != null ? request.getSpeed() : 1.0;
+
+            log.info("Generating voice for project {} | language={} | speed={}",
+                    projectId, language, speed);
 
             byte[] audioData = edgeTTSService.generateTTS(
                     script.getContent(),
                     request.getVoiceName(),
-                    request.getSpeed() != null ? request.getSpeed() : 1.0,
+                    speed,
                     language
             );
 
+            // Save audio file
             String audioPath = storageService.saveAudioFile(projectId, audioData, "mp3");
 
+            // ── Measure real duration via ffprobe ─────────────────────────
+            int durationSeconds = 0;
+            try {
+                Path audioFilePath = Paths.get(audioPath);
+                double durationDouble = getAudioDurationSeconds(audioFilePath);
+                durationSeconds = (int) Math.ceil(durationDouble);
+                log.info("Voiceover duration: {}s ({}s raw)", durationSeconds, durationDouble);
+            } catch (Exception e) {
+                log.warn("Could not measure voiceover duration: {}", e.getMessage());
+            }
+
+            // Delete old voiceover record
             voiceOverRepository.findByProjectId(projectId)
                     .ifPresent(voiceOverRepository::delete);
 
@@ -61,7 +82,8 @@ public class VoiceService {
                     .audioPath(audioPath)
                     .voiceName(VoiceOver.VoiceName.valueOf(request.getVoiceName()))
                     .stylePrompt(request.getStylePrompt())
-                    .speed(request.getSpeed() != null ? request.getSpeed() : 1.0)
+                    .speed(speed)
+                    .durationSeconds(durationSeconds)
                     .build();
 
             voiceOver = voiceOverRepository.save(voiceOver);
@@ -87,6 +109,40 @@ public class VoiceService {
                 .orElseThrow(() -> new RuntimeException("Voice-over not found"));
         Path path = Paths.get(vo.getAudioPath());
         return new FileSystemResource(path.toFile());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // HELPERS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Use ffprobe to get exact audio duration in seconds.
+     */
+    private double getAudioDurationSeconds(Path audioPath) throws Exception {
+        List<String> command = List.of(
+                ffprobePath.replace("/", "\\"),
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                audioPath.toAbsolutePath().toString()
+        );
+
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.redirectErrorStream(true);
+        Process p = pb.start();
+
+        String result = null;
+        try (BufferedReader reader =
+                     new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+            result = reader.readLine();
+            p.waitFor();
+        }
+
+        if (result != null && !result.isBlank()) {
+            return Double.parseDouble(result.trim());
+        }
+
+        throw new RuntimeException("ffprobe returned no duration for: " + audioPath);
     }
 
     private VoiceResponse toResponse(VoiceOver vo) {

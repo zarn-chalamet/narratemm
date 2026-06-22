@@ -41,6 +41,10 @@ public class ExportService {
     @Value("${app.tools.fonts-dir:}")
     private String fontsDir;
 
+    // atempo: 0.5 (slow) to 2.0 (fast) per filter instance
+    // We chain filters for values outside this range
+    private static final double TEMPO_TOLERANCE = 0.02; // 2% tolerance, skip adjustment
+
     // ─────────────────────────────────────────────────────────────────────────
     // PUBLIC API
     // ─────────────────────────────────────────────────────────────────────────
@@ -50,7 +54,6 @@ public class ExportService {
         projectService.updateStatus(projectId, Project.ProjectStatus.EXPORTING);
 
         ExportSettings settings = request.getSettings();
-
         if (settings.getAspectRatio() == null || settings.getAspectRatio().isBlank()) {
             settings.setAspectRatio(project.getAspectRatio());
         }
@@ -72,7 +75,6 @@ public class ExportService {
 
         job = exportJobRepository.save(job);
         runFFmpegAsync(job.getId(), project, settings);
-
         return toResponse(job);
     }
 
@@ -85,16 +87,13 @@ public class ExportService {
     public Resource getDownloadResource(String jobId) {
         ExportJob job = exportJobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Export job not found"));
-
         if (job.getStatus() != ExportJob.ExportStatus.DONE) {
             throw new RuntimeException("Export not yet complete");
         }
-
         Path path = Paths.get(job.getOutputPath());
         if (!Files.exists(path)) {
             throw new RuntimeException("Output file not found on disk");
         }
-
         return new FileSystemResource(path.toFile());
     }
 
@@ -116,127 +115,579 @@ public class ExportService {
         ExportJob job = exportJobRepository.findById(jobId).orElse(null);
         if (job == null) return;
 
+        Path adjustedVoicePath = null; // temp file, cleaned up in finally
+
         try {
-            Path projectDir = storageService.getProjectDir(project.getId());
-            Path outputPath = projectDir.resolve("final_output.mp4");
+            Path projectDir   = storageService.getProjectDir(project.getId());
+            Path outputPath   = projectDir.resolve("final_output.mp4");
+            Path voiceoverPath = projectDir.resolve("voiceover.mp3");
 
-             Files.deleteIfExists(outputPath);
+            Files.deleteIfExists(outputPath);
 
-            // Step 1: Resolve source video
+            // ── Step 1: Resolve source video ─────────────────────────────
             Path sourcePath = resolveSourceVideo(project, projectDir);
             log.info("Source video: {}", sourcePath);
 
-            // Step 2: Prepare SRT subtitles
+            // ── Step 2: Measure REAL durations via ffprobe ───────────────
+            double videoDuration = getMediaDuration(sourcePath);
+            log.info("Video duration: {}s", videoDuration);
+
+            boolean hasVoiceover = Files.exists(voiceoverPath)
+                    && Files.size(voiceoverPath) > 0;
+
+            double voiceDuration = 0.0;
+            if (hasVoiceover) {
+                voiceDuration = getMediaDuration(voiceoverPath);
+                log.info("Voiceover duration: {}s", voiceDuration);
+            }
+
+            // ── Step 3: Calculate tempo ratio ────────────────────────────
+            //
+            //   tempoRatio = voiceDuration / videoDuration
+            //
+            //   Example: voice=240s, video=180s → ratio=1.333
+            //   → speed up voice 1.333x so it finishes exactly at 180s
+            //   → SRT timestamps ÷ 1.333 to match compressed timeline
+            //
+            double tempoRatio = 1.0;
+            Path activeVoiceover = voiceoverPath;
+
+            if (hasVoiceover && videoDuration > 1.0 && voiceDuration > 1.0) {
+                tempoRatio = voiceDuration / videoDuration;
+                log.info("Raw tempo ratio (voice/video): {}", String.format("%.4f", tempoRatio));
+
+                // Clamp to supported range (0.25x – 4.0x)
+                double clampedRatio = Math.max(0.25, Math.min(4.0, tempoRatio));
+                if (clampedRatio != tempoRatio) {
+                    log.warn("Tempo ratio clamped from {} to {}",
+                            tempoRatio, clampedRatio);
+                    tempoRatio = clampedRatio;
+                }
+
+                if (Math.abs(tempoRatio - 1.0) > TEMPO_TOLERANCE) {
+                    adjustedVoicePath = projectDir.resolve("voiceover_adjusted.mp3");
+                    Files.deleteIfExists(adjustedVoicePath);
+
+                    log.info("Adjusting voiceover speed by {}x ...", tempoRatio);
+                    adjustVoiceoverTempo(voiceoverPath, adjustedVoicePath, tempoRatio);
+
+                    // Verify output
+                    double adjustedDuration = getMediaDuration(adjustedVoicePath);
+                    log.info("Adjusted voice duration: {}s (target: {}s)",
+                            adjustedDuration, videoDuration);
+
+                    activeVoiceover = adjustedVoicePath;
+                } else {
+                    log.info("Tempo ratio {:.4f} within {}% tolerance — skipping adjustment",
+                            tempoRatio, (int)(TEMPO_TOLERANCE * 100));
+                    tempoRatio = 1.0; // treat as no change for SRT remapping
+                }
+            }
+
+            // ── Step 4: Generate synced SRT ───────────────────────────────
+            //
+            //  tempoRatio is used to remap SRT timestamps:
+            //  newTimestamp = originalTimestamp / tempoRatio
+            //
             Path srtPath = null;
             if (Boolean.TRUE.equals(settings.getSubtitleEnabled())) {
                 try {
                     srtPath = prepareSrtFile(
-                            project, projectDir, settings.getSubtitleLanguage());
+                            project, projectDir,
+                            settings.getSubtitleLanguage(),
+                            videoDuration,
+                            voiceDuration,
+                            tempoRatio);
                 } catch (Exception e) {
-                    log.warn("SRT failed, exporting without subtitles: {}", e.getMessage());
+                    log.warn("SRT generation failed, proceeding without subtitles: {}",
+                            e.getMessage());
                     settings.setSubtitleEnabled(false);
-                    srtPath = null;
                 }
             }
 
-            // Step 3: Build FFmpeg argument list (no shell wrapper)
+            // ── Step 5: Build & run FFmpeg ────────────────────────────────
             List<String> ffmpegArgs = buildFFmpegArgs(
-                    sourcePath, projectDir, outputPath, settings, srtPath);
-            log.info("FFmpeg args: {}", ffmpegArgs);
+                    sourcePath, projectDir, outputPath,
+                    settings, srtPath, activeVoiceover);
 
-            // Step 4: Run FFmpeg directly - NO cmd /c
-            ProcessBuilder pb = new ProcessBuilder(ffmpegArgs);
-            pb.redirectErrorStream(true);
-
-            // Set font environment variables
-            if (fontsDir != null && !fontsDir.isBlank()) {
-                Map<String, String> env = pb.environment();
-                String fontsDirWin = fontsDir.replace("/", "\\");
-                env.put("FONTCONFIG_PATH", fontsDirWin);
-                env.put("FC_CONFIG_DIR", fontsDirWin);
-                log.info("Font dir: {}", fontsDirWin);
-            }
-
-            Process process = pb.start();
-
-            // Step 5: Capture output + track progress
-            StringBuilder ffmpegOutput = new StringBuilder();
-            Pattern durationPat = Pattern.compile("Duration: (\\d{2}):(\\d{2}):(\\d{2})");
-            Pattern timePat     = Pattern.compile("time=(\\d{2}):(\\d{2}):(\\d{2})");
-            long totalSecs = 0;
-
-            try (BufferedReader reader =
-                         new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    log.info("FFmpeg: {}", line);
-                    ffmpegOutput.append(line).append("\n");
-
-                    Matcher dm = durationPat.matcher(line);
-                    if (dm.find()) {
-                        totalSecs = toSeconds(dm.group(1), dm.group(2), dm.group(3));
-                    }
-
-                    Matcher tm = timePat.matcher(line);
-                    if (tm.find() && totalSecs > 0) {
-                        long current = toSeconds(tm.group(1), tm.group(2), tm.group(3));
-                        int progress = (int) Math.min(99, current * 100 / totalSecs);
-                        job.setProgress(progress);
-                        exportJobRepository.save(job);
-                    }
-                }
-            }
-
-            int exitCode = process.waitFor();
-            log.info("FFmpeg exit code: {}", exitCode);
-
-            if (exitCode == 0 && Files.exists(outputPath)) {
-                job.setStatus(ExportJob.ExportStatus.DONE);
-                job.setProgress(100);
-                job.setOutputPath(normalizePath(outputPath));
-                job.setCompletedAt(LocalDateTime.now());
-                projectService.updateStatus(project.getId(), Project.ProjectStatus.DONE);
-                log.info("✅ Export complete: {}", outputPath);
-            } else {
-                String errorMsg = extractFFmpegError(ffmpegOutput.toString());
-                log.error("FFmpeg full output:\n{}", ffmpegOutput);
-                throw new RuntimeException("FFmpeg failed: " + errorMsg);
-            }
+            log.info("FFmpeg command: {}", ffmpegArgs);
+            runFFmpeg(ffmpegArgs, job);
 
         } catch (Exception e) {
             log.error("❌ Export failed [{}]: {}", jobId, e.getMessage(), e);
             job = exportJobRepository.findById(jobId).orElse(job);
             job.setStatus(ExportJob.ExportStatus.FAILED);
-
             String errMsg = e.getMessage() != null ? e.getMessage() : "Unknown error";
             if (errMsg.length() > 1000) errMsg = errMsg.substring(0, 1000) + "...";
             job.setErrorMessage(errMsg);
             job.setCompletedAt(LocalDateTime.now());
             projectService.updateStatus(project.getId(), Project.ProjectStatus.FAILED);
+            exportJobRepository.save(job);
+        } finally {
+            // Always clean up temp adjusted voice file
+            if (adjustedVoicePath != null) {
+                try {
+                    Files.deleteIfExists(adjustedVoicePath);
+                    log.info("Cleaned up temp file: {}", adjustedVoicePath);
+                } catch (Exception ignored) {}
+            }
         }
-
-        exportJobRepository.save(job);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // VIDEO SOURCE RESOLUTION
+    // FFMPEG RUNNER
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private void runFFmpeg(List<String> args, ExportJob job) throws Exception {
+        Path projectDir = storageService.getProjectDir(job.getProject().getId());
+        Path outputPath = projectDir.resolve("final_output.mp4");
+
+        ProcessBuilder pb = new ProcessBuilder(args);
+        pb.redirectErrorStream(true);
+
+        if (fontsDir != null && !fontsDir.isBlank()) {
+            Map<String, String> env = pb.environment();
+            String fontsDirWin = fontsDir.replace("/", "\\");
+            env.put("FONTCONFIG_PATH", fontsDirWin);
+            env.put("FC_CONFIG_DIR",   fontsDirWin);
+        }
+
+        Process process = pb.start();
+
+        StringBuilder ffmpegOutput = new StringBuilder();
+        Pattern durationPat = Pattern.compile("Duration: (\\d{2}):(\\d{2}):(\\d{2})");
+        Pattern timePat     = Pattern.compile("time=(\\d{2}):(\\d{2}):(\\d{2})");
+        long totalSecs = 0;
+
+        try (BufferedReader reader =
+                     new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                log.info("FFmpeg: {}", line);
+                ffmpegOutput.append(line).append("\n");
+
+                Matcher dm = durationPat.matcher(line);
+                if (dm.find()) {
+                    totalSecs = toSeconds(dm.group(1), dm.group(2), dm.group(3));
+                }
+                Matcher tm = timePat.matcher(line);
+                if (tm.find() && totalSecs > 0) {
+                    long current = toSeconds(tm.group(1), tm.group(2), tm.group(3));
+                    int progress = (int) Math.min(99, current * 100 / totalSecs);
+                    job.setProgress(progress);
+                    exportJobRepository.save(job);
+                }
+            }
+        }
+
+        int exitCode = process.waitFor();
+        log.info("FFmpeg exit code: {}", exitCode);
+
+        if (exitCode == 0 && Files.exists(outputPath)) {
+            job.setStatus(ExportJob.ExportStatus.DONE);
+            job.setProgress(100);
+            job.setOutputPath(normalizePath(outputPath));
+            job.setCompletedAt(LocalDateTime.now());
+            projectService.updateStatus(job.getProject().getId(), Project.ProjectStatus.DONE);
+            exportJobRepository.save(job);
+            log.info("✅ Export complete: {}", outputPath);
+        } else {
+            throw new RuntimeException(
+                    "FFmpeg failed (exit " + exitCode + "): "
+                    + extractFFmpegError(ffmpegOutput.toString()));
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // VOICEOVER TEMPO ADJUSTMENT
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Speed-adjust voiceover to match video duration.
+     *
+     * tempoRatio = voiceDuration / videoDuration
+     *   > 1.0 = voice is LONGER than video → speed UP (compress)
+     *   < 1.0 = voice is SHORTER than video → slow DOWN (stretch)
+     *
+     * FFmpeg atempo range per filter: [0.5, 2.0]
+     * For values outside this, we CHAIN filters.
+     */
+    private void adjustVoiceoverTempo(Path input, Path output, double tempoRatio)
+            throws Exception {
+
+        String filterChain = buildAtempoFilterChain(tempoRatio);
+        log.info("atempo filter chain: {} (ratio={})", filterChain, tempoRatio);
+
+        List<String> args = List.of(
+                ffmpegPath.replace("/", "\\"),
+                "-y",
+                "-i", normalizePath(input),
+                "-filter:a", filterChain,
+                "-c:a", "libmp3lame",
+                "-q:a", "2",
+                normalizePath(output)
+        );
+
+        ProcessBuilder pb = new ProcessBuilder(args);
+        pb.redirectErrorStream(true);
+        Process p = pb.start();
+
+        StringBuilder out = new StringBuilder();
+        try (BufferedReader r =
+                     new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                log.debug("atempo: {}", line);
+                out.append(line).append("\n");
+            }
+        }
+
+        int exit = p.waitFor();
+        if (exit != 0 || !Files.exists(output)) {
+            throw new RuntimeException(
+                    "Tempo adjustment failed (exit " + exit + "): "
+                    + extractFFmpegError(out.toString()));
+        }
+    }
+
+    /**
+     * Build chained atempo filter.
+     *
+     * atempo only accepts 0.5 – 2.0 per instance.
+     * Chain multiple to handle extreme ratios:
+     *   ratio=3.0  → atempo=2.0,atempo=1.5
+     *   ratio=0.25 → atempo=0.5,atempo=0.5
+     */
+    private String buildAtempoFilterChain(double ratio) {
+        List<String> filters = new ArrayList<>();
+
+        if (ratio > 2.0) {
+            // Speed up: keep dividing by 2.0 until within range
+            while (ratio > 2.0) {
+                filters.add("atempo=2.0");
+                ratio /= 2.0;
+            }
+        } else if (ratio < 0.5) {
+            // Slow down: keep multiplying by 0.5 until within range
+            while (ratio < 0.5) {
+                filters.add("atempo=0.5");
+                ratio /= 0.5;
+            }
+        }
+
+        // Add the remaining ratio (now guaranteed within [0.5, 2.0])
+        filters.add(String.format(Locale.US, "atempo=%.6f", ratio));
+
+        return String.join(",", filters);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SRT PREPARATION
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * @param subtitleLanguage "burmese" → Burmese script, else original transcript SRT
+     * @param videoDuration    real video duration (seconds) — the final timeline
+     * @param voiceDuration    real voiceover duration BEFORE tempo adjustment
+     * @param tempoRatio       voiceDuration / videoDuration (applied to voice)
+     *                         All SRT timestamps are divided by this ratio to sync
+     */
+    private Path prepareSrtFile(Project project, Path projectDir,
+                                String subtitleLanguage,
+                                double videoDuration,
+                                double voiceDuration,
+                                double tempoRatio) throws Exception {
+
+        Path srtPath = projectDir.resolve("subtitles.srt");
+        Files.deleteIfExists(srtPath);
+
+        if (subtitleLanguage == null || subtitleLanguage.isBlank()) {
+            subtitleLanguage = "burmese";
+        }
+
+        log.info("Preparing SRT | lang={} | videoDuration={}s | voiceDuration={}s | ratio={}",
+                subtitleLanguage, videoDuration, voiceDuration, tempoRatio);
+
+        String srtContent;
+
+        if ("burmese".equalsIgnoreCase(subtitleLanguage)) {
+            // ── Burmese: distribute script evenly over voiceDuration, ─────
+            //            then remap timestamps by ÷ tempoRatio
+            Script script = scriptRepository.findByProjectId(project.getId())
+                    .orElseThrow(() -> new RuntimeException(
+                            "Script not found. Generate script first."));
+
+            // Use voiceDuration as the base (original speech timing),
+            // then compress by tempoRatio to get final video-synced timing
+            double baseDuration = voiceDuration > 1.0 ? voiceDuration : videoDuration;
+            srtContent = generateBurmeseAlignedSrt(
+                    script.getContent(), baseDuration, tempoRatio);
+
+        } else {
+            // ── Original language: use stored SRT, remap timestamps ───────
+            Transcript transcript = transcriptRepository.findByProjectId(project.getId())
+                    .orElseThrow(() -> new RuntimeException(
+                            "Transcript not found. Transcribe first."));
+
+            if (transcript.getSrtContent() == null
+                    || transcript.getSrtContent().isBlank()) {
+                throw new RuntimeException(
+                        "Original SRT is empty. Re-transcribe or use Burmese subtitles.");
+            }
+
+            srtContent = transcript.getSrtContent();
+
+            // Remap timestamps if tempo was changed
+            if (Math.abs(tempoRatio - 1.0) > TEMPO_TOLERANCE) {
+                log.info("Remapping original SRT timestamps by ratio={}", tempoRatio);
+                srtContent = remapSrtTimestamps(srtContent, tempoRatio);
+            }
+        }
+
+        writeSrtWithBom(srtPath, srtContent);
+        log.info("✅ SRT written: {} ({} chars)", srtPath, srtContent.length());
+        return srtPath;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SRT GENERATORS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Generate Burmese SRT:
+     * 1. Distribute sentences evenly over baseDuration (= original voice duration)
+     * 2. Remap each timestamp by ÷ tempoRatio to get compressed/stretched timing
+     *
+     * Result: subtitles appear exactly in sync with the tempo-adjusted voice.
+     */
+    private String generateBurmeseAlignedSrt(String script,
+                                              double baseDuration,
+                                              double tempoRatio) {
+        String cleaned = cleanScript(script);
+        if (cleaned.isEmpty()) return "";
+
+        String[] sentences = splitSentences(cleaned);
+        if (sentences.length == 0) return "";
+
+        double timePerSentence = baseDuration / sentences.length;
+        StringBuilder srt = new StringBuilder();
+        double cursor = 0.0;
+        int index = 1;
+
+        for (String sentence : sentences) {
+            sentence = sentence.trim();
+            if (sentence.length() <= 1) continue;
+
+            if (sentence.length() > 80) {
+                // Split long sentences at Burmese/Myanmar punctuation
+                String[] parts = sentence.split("(?<=[,၊،])\\s*");
+                double subTime = timePerSentence / Math.max(parts.length, 1);
+
+                for (String part : parts) {
+                    part = part.trim();
+                    if (part.length() <= 1) continue;
+
+                    double startRemapped = cursor / tempoRatio;
+                    double endRemapped   = (cursor + subTime) / tempoRatio;
+                    appendSrtEntry(srt, index++, startRemapped, endRemapped, part);
+                    cursor += subTime;
+                }
+            } else {
+                double startRemapped = cursor / tempoRatio;
+                double endRemapped   = (cursor + timePerSentence) / tempoRatio;
+                appendSrtEntry(srt, index++, startRemapped, endRemapped, sentence);
+                cursor += timePerSentence;
+            }
+        }
+
+        return srt.toString();
+    }
+
+    /**
+     * Remap all SRT timestamps by dividing by tempoRatio.
+     *
+     * When voice is sped up (tempoRatio > 1.0):
+     *   original subtitle at 00:02:00 → remapped to 00:01:30 (for ratio=1.333)
+     *   This matches where the sped-up audio is actually saying those words.
+     */
+    private String remapSrtTimestamps(String srtContent, double tempoRatio) {
+        if (Math.abs(tempoRatio - 1.0) < 0.001) return srtContent;
+
+        // Matches both "00:00:00,000" and "00:00:00.000"
+        Pattern tsPattern = Pattern.compile(
+                "(\\d{2}):(\\d{2}):(\\d{2})[,\\.](\\d{3})");
+
+        StringBuilder result = new StringBuilder();
+        Matcher m = tsPattern.matcher(srtContent);
+
+        while (m.find()) {
+            long h  = Long.parseLong(m.group(1));
+            long mi = Long.parseLong(m.group(2));
+            long s  = Long.parseLong(m.group(3));
+            long ms = Long.parseLong(m.group(4));
+
+            // Total milliseconds
+            double totalMs = (h * 3600L + mi * 60L + s) * 1000.0 + ms;
+
+            // Remap
+            double remappedMs = totalMs / tempoRatio;
+
+            long rh  = (long) remappedMs / 3_600_000;
+            long rmi = ((long) remappedMs % 3_600_000) / 60_000;
+            long rs  = ((long) remappedMs % 60_000) / 1_000;
+            long rms = (long) remappedMs % 1_000;
+
+            m.appendReplacement(result,
+                    String.format("%02d:%02d:%02d,%03d", rh, rmi, rs, rms));
+        }
+        m.appendTail(result);
+
+        return result.toString();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // FFMPEG ARG BUILDER
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private List<String> buildFFmpegArgs(Path source, Path projectDir, Path output,
+                                          ExportSettings settings, Path srtPath,
+                                          Path activeVoiceover) throws IOException {
+
+        boolean hasVoiceover = activeVoiceover != null
+                && Files.exists(activeVoiceover)
+                && Files.size(activeVoiceover) > 0;
+
+        Path logo = projectDir.resolve("logo.png");
+        boolean hasLogo = Files.exists(logo);
+
+        boolean hasSrt = srtPath != null
+                && Files.exists(srtPath)
+                && Boolean.TRUE.equals(settings.getSubtitleEnabled());
+
+        String[] wh = resolveResolution(settings.getAspectRatio()).split("x");
+        String w = wh[0], h = wh[1];
+
+        int    mix      = settings.getAudioMix() != null ? settings.getAudioMix() : 70;
+        float  origVol  = (100 - mix) / 100.0f;
+        float  voiceVol = mix          / 100.0f;
+
+        double alpha = (settings.getLogoOpacity() != null
+                ? settings.getLogoOpacity() : 80) / 100.0;
+        int logoW = (int) (200.0 * (settings.getLogoSize() != null
+                ? settings.getLogoSize() : 100) / 100.0);
+        String logoPos = buildLogoPosition(settings.getLogoPosition());
+
+        // ── filter_complex ───────────────────────────────────────────────
+        StringBuilder filter = new StringBuilder();
+
+        // 1. Scale + pad video
+        filter.append("[0:v]scale=").append(w).append(":").append(h)
+              .append(":force_original_aspect_ratio=decrease,")
+              .append("pad=").append(w).append(":").append(h)
+              .append(":(ow-iw)/2:(oh-ih)/2:black[scaled]");
+
+        String lastV = "scaled";
+
+        // 2. Subtitles
+        if (hasSrt) {
+            String srtForFilter = normalizePath(srtPath)
+                    .replace("\\", "/")
+                    .replaceFirst("^([A-Za-z]):/", "$1\\\\:/");
+
+            String font     = (settings.getSubtitleFont() != null
+                    && !settings.getSubtitleFont().isBlank())
+                    ? settings.getSubtitleFont() : "Myanmar Text";
+            int    fontSize = settings.getSubtitleSize() != null
+                    ? settings.getSubtitleSize() : 24;
+
+            filter.append(";[").append(lastV).append("]")
+                  .append("subtitles=filename='").append(srtForFilter).append("'")
+                  .append(":force_style='")
+                  .append("FontName=").append(font).append(",")
+                  .append("FontSize=").append(fontSize).append(",")
+                  .append("PrimaryColour=&H00FFFFFF,")
+                  .append("OutlineColour=&H00000000,")
+                  .append("BorderStyle=1,")
+                  .append("Outline=2,")
+                  .append("Shadow=0,")
+                  .append("MarginV=30,")
+                  .append("Alignment=2")
+                  .append("'[subtitled]");
+            lastV = "subtitled";
+        }
+
+        // 3. Logo overlay
+        // Input index: 0=video, 1=voiceover (if any), last=logo
+        int logoInputIdx = hasVoiceover ? 2 : 1;
+        if (hasLogo) {
+            filter.append(";[").append(logoInputIdx).append(":v]")
+                  .append("scale=").append(logoW).append(":-1,")
+                  .append("format=rgba,")
+                  .append("colorchannelmixer=aa=")
+                  .append(String.format(Locale.US, "%.2f", alpha))
+                  .append("[logo]")
+                  .append(";[").append(lastV).append("][logo]overlay=")
+                  .append(logoPos).append("[finalv]");
+            lastV = "finalv";
+        }
+
+        // 4. Audio mix
+        if (hasVoiceover) {
+            filter.append(";[0:a]volume=")
+                  .append(String.format(Locale.US, "%.2f", origVol)).append("[a0]")
+                  .append(";[1:a]volume=")
+                  .append(String.format(Locale.US, "%.2f", voiceVol)).append("[a1]")
+                  .append(";[a0][a1]amix=inputs=2:duration=first[aout]");
+        }
+
+        // ── Assemble args ────────────────────────────────────────────────
+        List<String> args = new ArrayList<>();
+        args.add(ffmpegPath.replace("/", "\\"));
+        args.add("-y");
+
+        args.add("-i"); args.add(normalizePath(source));
+        if (hasVoiceover) {
+            args.add("-i"); args.add(normalizePath(activeVoiceover));
+        }
+        if (hasLogo) {
+            args.add("-i"); args.add(normalizePath(logo));
+        }
+
+        args.add("-filter_complex"); args.add(filter.toString());
+
+        args.add("-map"); args.add("[" + lastV + "]");
+        if (hasVoiceover) {
+            args.add("-map"); args.add("[aout]");
+        } else {
+            args.add("-map"); args.add("0:a?");
+        }
+
+        args.add("-c:v");      args.add("libx264");
+        args.add("-preset");   args.add("fast");
+        args.add("-crf");      args.add("23");
+        args.add("-c:a");      args.add("aac");
+        args.add("-b:a");      args.add("192k");
+        args.add("-movflags"); args.add("+faststart");
+        args.add("-shortest"); // stop at shortest stream (video)
+
+        args.add(normalizePath(output));
+        return args;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // VIDEO SOURCE
     // ─────────────────────────────────────────────────────────────────────────
 
     private Path resolveSourceVideo(Project project, Path projectDir) throws Exception {
-
         if (project.getVideoPath() != null && !project.getVideoPath().isBlank()) {
             Path p = Paths.get(project.getVideoPath());
-            if (Files.exists(p)) {
-                log.info("Using uploaded video: {}", p);
-                return p;
-            }
+            if (Files.exists(p)) return p;
             log.warn("videoPath set but file missing: {}", p);
         }
 
         for (String ext : new String[]{"mp4", "mkv", "webm", "mov", "avi"}) {
             Path candidate = projectDir.resolve("source." + ext);
             if (Files.exists(candidate) && Files.size(candidate) > 1024) {
-                log.info("Found existing source file: {}", candidate);
                 return candidate;
             }
         }
@@ -254,320 +705,116 @@ public class ExportService {
             throws Exception {
 
         Path outputFile = projectDir.resolve("source.mp4");
-
         if (Files.exists(outputFile) && Files.size(outputFile) > 1024) {
             log.info("YouTube video already downloaded: {}", outputFile);
             return outputFile;
         }
 
-        log.info("Downloading YouTube video: {}", youtubeUrl);
-
-        List<String> command = new ArrayList<>();
-        command.add(ytDlpPath.replace("/", "\\"));
-        command.add("-f");
-        command.add("bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b");
-        command.add("--merge-output-format");
-        command.add("mp4");
-        command.add("--no-playlist");
-        command.add("--force-overwrites");
-        command.add("-o");
-        command.add(normalizePath(outputFile));
-        command.add(youtubeUrl);
-
-        log.info("yt-dlp command: {}", command);
+        List<String> command = List.of(
+                ytDlpPath.replace("/", "\\"),
+                "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b",
+                "--merge-output-format", "mp4",
+                "--no-playlist",
+                "--force-overwrites",
+                "-o", normalizePath(outputFile),
+                youtubeUrl
+        );
 
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectErrorStream(true);
         Process process = pb.start();
 
-        StringBuilder outputLog = new StringBuilder();
-        try (BufferedReader reader =
+        StringBuilder log_ = new StringBuilder();
+        try (BufferedReader r =
                      new BufferedReader(new InputStreamReader(process.getInputStream()))) {
             String line;
-            while ((line = reader.readLine()) != null) {
+            while ((line = r.readLine()) != null) {
                 log.info("yt-dlp: {}", line);
-                outputLog.append(line).append("\n");
+                log_.append(line).append("\n");
             }
         }
 
-        int exitCode = process.waitFor();
-
-        if (exitCode != 0 || !Files.exists(outputFile)) {
-            throw new RuntimeException(
-                    "yt-dlp failed (exit code " + exitCode + ").\n" + outputLog);
+        int exit = process.waitFor();
+        if (exit != 0 || !Files.exists(outputFile)) {
+            throw new RuntimeException("yt-dlp failed (exit " + exit + "):\n" + log_);
         }
 
         projectService.updateVideoPath(projectId, normalizePath(outputFile));
-
-        log.info("✅ Downloaded: {} ({} MB)",
+        log.info("✅ Downloaded YouTube video: {} ({}MB)",
                 outputFile, Files.size(outputFile) / 1024 / 1024);
-
         return outputFile;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // SRT PREPARATION
+    // SCRIPT / TEXT UTILITIES
     // ─────────────────────────────────────────────────────────────────────────
 
-    private Path prepareSrtFile(Project project, Path projectDir, String subtitleLanguage)
-        throws Exception {
-
-        Path srtPath = projectDir.resolve("subtitles.srt");
-
-        // ✅ ALWAYS delete old SRT to force regeneration with correct language
-        Files.deleteIfExists(srtPath);
-
-        // Default to burmese if null
-        if (subtitleLanguage == null || subtitleLanguage.isBlank()) {
-            subtitleLanguage = "burmese";
-        }
-
-        log.info("🌐 Preparing SRT in language: {}", subtitleLanguage);
-
-        if ("burmese".equalsIgnoreCase(subtitleLanguage)) {
-            log.info("📝 Using Burmese SCRIPT for subtitles");
-
-            Script script = scriptRepository.findByProjectId(project.getId())
-                    .orElseThrow(() -> new RuntimeException(
-                            "Script not found – generate the script first."));
-
-            Path voiceoverPath = projectDir.resolve("voiceover.mp3");
-            double duration = Files.exists(voiceoverPath)
-                    ? getAudioDuration(voiceoverPath) : 60.0;
-
-            String srtContent = generateSrtFromScript(script.getContent(), duration);
-
-            // Write with UTF-8 BOM
-            byte[] bom = new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
-            byte[] content = srtContent.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            byte[] withBom = new byte[bom.length + content.length];
-            System.arraycopy(bom, 0, withBom, 0, bom.length);
-            System.arraycopy(content, 0, withBom, bom.length, content.length);
-            Files.write(srtPath, withBom);
-
-            log.info("✅ Generated Burmese SRT ({} chars) → {}", srtContent.length(), srtPath);
-
-        } else {
-            log.info("📝 Using ORIGINAL transcript for subtitles");
-
-            Transcript transcript = transcriptRepository.findByProjectId(project.getId())
-                    .orElseThrow(() -> new RuntimeException(
-                            "Transcript not found – transcribe first."));
-
-            if (transcript.getSrtContent() == null || transcript.getSrtContent().isBlank()) {
-                throw new RuntimeException(
-                        "Original SRT is empty. Re-transcribe or use Burmese subtitles.");
-            }
-
-            byte[] bom = new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
-            byte[] content = transcript.getSrtContent()
-                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            byte[] withBom = new byte[bom.length + content.length];
-            System.arraycopy(bom, 0, withBom, 0, bom.length);
-            System.arraycopy(content, 0, withBom, bom.length, content.length);
-            Files.write(srtPath, withBom);
-
-            log.info("✅ Using original SRT → {}", srtPath);
-        }
-
-        return srtPath;
-    }
-
-    private String generateSrtFromScript(String script, double totalDuration) {
-        // Clean script - remove standalone dots and empty lines
-        String cleaned = script
+    private String cleanScript(String script) {
+        return script
                 .replaceAll("(?m)^\\s*\\.\\s*$", "")
                 .replaceAll("(?m)^\\s*$\\n", "")
                 .trim();
+    }
 
-        if (cleaned.isEmpty()) return "";
-
-        String[] sentences = cleaned.split("(?<=[.!?။])\\s*");
-
-        int validCount = 0;
-        for (String s : sentences) {
-            if (s.trim().length() > 2) validCount++;
-        }
-        if (validCount == 0) return "";
-
-        double timePerSentence = totalDuration / validCount;
-        StringBuilder srt = new StringBuilder();
-        double currentTime = 0;
-        int index = 1;
-
-        for (String sentence : sentences) {
-            sentence = sentence.trim();
-            if (sentence.length() <= 2) continue;
-
-            if (sentence.length() > 80) {
-                String[] parts = sentence.split("(?<=[,၊])\\s*");
-                double subTime = timePerSentence / Math.max(parts.length, 1);
-                for (String part : parts) {
-                    part = part.trim();
-                    if (part.length() <= 2) continue;
-                    appendSrtEntry(srt, index++, currentTime, currentTime + subTime, part);
-                    currentTime += subTime;
-                }
-            } else {
-                appendSrtEntry(srt, index++, currentTime,
-                        currentTime + timePerSentence, sentence);
-                currentTime += timePerSentence;
-            }
-        }
-
-        return srt.toString();
+    private String[] splitSentences(String cleaned) {
+        return Arrays.stream(cleaned.split("(?<=[.!?။])\\s*"))
+                .map(String::trim)
+                .filter(s -> s.length() > 1)
+                .toArray(String[]::new);
     }
 
     private void appendSrtEntry(StringBuilder srt, int index,
                                 double start, double end, String text) {
+        if (start < 0) start = 0;
+        if (end <= start) end = start + 0.5;
         srt.append(index).append("\n")
-           .append(formatSrtTimeDouble(start))
-           .append(" --> ")
-           .append(formatSrtTimeDouble(end)).append("\n")
-           .append(text).append("\n\n");
+           .append(formatSrtTime(start)).append(" --> ").append(formatSrtTime(end)).append("\n")
+           .append(text.trim()).append("\n\n");
+    }
+
+    private void writeSrtWithBom(Path path, String content) throws IOException {
+        byte[] bom     = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
+        byte[] body    = content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] full    = new byte[bom.length + body.length];
+        System.arraycopy(bom, 0, full, 0, bom.length);
+        System.arraycopy(body, 0, full, bom.length, body.length);
+        Files.write(path, full);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // FFMPEG ARG LIST BUILDER (no shell, no escaping issues)
+    // MEDIA UTILITIES
     // ─────────────────────────────────────────────────────────────────────────
 
-    private List<String> buildFFmpegArgs(Path source, Path projectDir, Path output,
-                                          ExportSettings settings, Path srtPath) {
+    private double getMediaDuration(Path mediaPath) {
+        try {
+            List<String> command = List.of(
+                    ffprobePath.replace("/", "\\"),
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    normalizePath(mediaPath)
+            );
 
-        Path voiceover = projectDir.resolve("voiceover.mp3");
-        boolean hasVoiceover = Files.exists(voiceover);
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
 
-        Path logo = projectDir.resolve("logo.png");
-        boolean hasLogo = Files.exists(logo);
+            String result;
+            try (BufferedReader r =
+                         new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                result = r.readLine();
+                p.waitFor();
+            }
 
-        boolean hasSrt = (srtPath != null) && Files.exists(srtPath)
-                && Boolean.TRUE.equals(settings.getSubtitleEnabled());
-
-        String[] wh = resolveResolution(settings.getAspectRatio()).split("x");
-        String w = wh[0], h = wh[1];
-
-        int mix        = settings.getAudioMix() != null ? settings.getAudioMix() : 70;
-        float origVol  = (100 - mix) / 100.0f;
-        float voiceVol = mix / 100.0f;
-
-        double alpha = (settings.getLogoOpacity() != null
-                ? settings.getLogoOpacity() : 80) / 100.0;
-        int logoW = (int) (200.0 * (settings.getLogoSize() != null
-                ? settings.getLogoSize() : 100) / 100.0);
-        String logoPos = buildLogoPosition(settings.getLogoPosition());
-
-        // ── Build filter_complex string ─────────────────────────────────────
-        StringBuilder filter = new StringBuilder();
-
-        // Scale + pad
-        filter.append("[0:v]scale=").append(w).append(":").append(h)
-              .append(":force_original_aspect_ratio=decrease,")
-              .append("pad=").append(w).append(":").append(h)
-              .append(":(ow-iw)/2:(oh-ih)/2:black[scaled]");
-
-        String lastV = "scaled";
-
-        // Subtitles
-        if (hasSrt) {
-            // For ProcessBuilder, use forward slashes and escape drive colon
-            String srtForFilter = normalizePath(srtPath)
-                    .replace("\\", "/")
-                    .replaceFirst("^([A-Za-z]):/", "$1\\\\:/");
-
-            String font = (settings.getSubtitleFont() != null
-                    && !settings.getSubtitleFont().isBlank())
-                    ? settings.getSubtitleFont() : "Myanmar Text";
-            int fontSize = settings.getSubtitleSize() != null
-                    ? settings.getSubtitleSize() : 24;
-
-            filter.append(";[").append(lastV).append("]")
-                  .append("subtitles=filename='").append(srtForFilter).append("'")
-                  .append(":force_style='")
-                  .append("FontName=").append(font).append(",")
-                  .append("FontSize=").append(fontSize).append(",")
-                  .append("PrimaryColour=16777215,")
-                  .append("OutlineColour=0,")
-                  .append("BorderStyle=1,")
-                  .append("Outline=2,")
-                  .append("Shadow=0,")
-                  .append("MarginV=30,")
-                  .append("Alignment=2")
-                  .append("'[subtitled]");
-            lastV = "subtitled";
+            if (result != null && !result.isBlank()) {
+                return Double.parseDouble(result.trim());
+            }
+        } catch (Exception e) {
+            log.warn("ffprobe failed for {} : {}", mediaPath, e.getMessage());
         }
-
-        // Logo overlay
-        int logoIdx = hasVoiceover ? 2 : 1;
-        if (hasLogo) {
-            filter.append(";[").append(logoIdx).append(":v]")
-                  .append("scale=").append(logoW).append(":-1,")
-                  .append("format=rgba,")
-                  .append("colorchannelmixer=aa=").append(String.format("%.2f", alpha))
-                  .append("[logo]");
-            filter.append(";[").append(lastV).append("][logo]overlay=")
-                  .append(logoPos).append("[finalv]");
-            lastV = "finalv";
-        }
-
-        // Audio mix
-        if (hasVoiceover) {
-            filter.append(";[0:a]volume=")
-                  .append(String.format("%.2f", origVol)).append("[a0]")
-                  .append(";[1:a]volume=")
-                  .append(String.format("%.2f", voiceVol)).append("[a1]")
-                  .append(";[a0][a1]amix=inputs=2:duration=first[aout]");
-        }
-
-        // ── Build argument list ─────────────────────────────────────────────
-        List<String> args = new ArrayList<>();
-
-        // FFmpeg executable - use backslashes on Windows
-        args.add(ffmpegPath.replace("/", "\\"));
-        args.add("-y");
-
-        // Inputs
-        args.add("-i"); args.add(normalizePath(source));
-        if (hasVoiceover) {
-            args.add("-i"); args.add(normalizePath(voiceover));
-        }
-        if (hasLogo) {
-            args.add("-i"); args.add(normalizePath(logo));
-        }
-
-        // Filter complex
-        args.add("-filter_complex");
-        args.add(filter.toString());
-
-        // Output mapping
-        args.add("-map"); args.add("[" + lastV + "]");
-        if (hasVoiceover) {
-            args.add("-map"); args.add("[aout]");
-        } else {
-            args.add("-map"); args.add("0:a?");
-        }
-
-        // Encoding settings
-        args.add("-c:v");      args.add("libx264");
-        args.add("-preset");   args.add("fast");
-        args.add("-crf");      args.add("23");
-        args.add("-c:a");      args.add("aac");
-        args.add("-b:a");      args.add("192k");
-        args.add("-movflags"); args.add("+faststart");
-        args.add("-shortest");
-
-        // Output file
-        args.add(normalizePath(output));
-
-        return args;
+        return 0.0;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Normalize path: resolves \.\ and returns clean absolute path string
-     */
     private String normalizePath(Path path) {
         try {
             return path.toRealPath().toString();
@@ -577,10 +824,9 @@ public class ExportService {
     }
 
     private String extractFFmpegError(String output) {
-        if (output == null || output.isBlank()) return "No FFmpeg output captured";
-        String[] lines = output.split("\n");
+        if (output == null || output.isBlank()) return "No output captured";
         StringBuilder errors = new StringBuilder();
-        for (String line : lines) {
+        for (String line : output.split("\n")) {
             String lower = line.toLowerCase();
             if (lower.contains("error") || lower.contains("invalid")
                     || lower.contains("no such file") || lower.contains("failed")
@@ -589,9 +835,10 @@ public class ExportService {
             }
         }
         if (errors.length() > 0) {
-            String result = errors.toString();
-            return result.length() > 800 ? result.substring(0, 800) + "..." : result;
+            String r = errors.toString();
+            return r.length() > 800 ? r.substring(0, 800) + "..." : r;
         }
+        String[] lines = output.split("\n");
         int start = Math.max(0, lines.length - 5);
         StringBuilder sb = new StringBuilder();
         for (int i = start; i < lines.length; i++) {
@@ -604,6 +851,16 @@ public class ExportService {
         return Integer.parseInt(hh) * 3600L
              + Integer.parseInt(mm) * 60L
              + Integer.parseInt(ss);
+    }
+
+    private String formatSrtTime(double seconds) {
+        if (seconds < 0) seconds = 0;
+        int h  = (int) (seconds / 3600);
+        int m  = (int) ((seconds % 3600) / 60);
+        int s  = (int) (seconds % 60);
+        int ms = (int) Math.round((seconds - Math.floor(seconds)) * 1000);
+        if (ms >= 1000) { ms = 0; s++; }
+        return String.format("%02d:%02d:%02d,%03d", h, m, s, ms);
     }
 
     private String resolveResolution(String aspectRatio) {
@@ -631,42 +888,6 @@ public class ExportService {
             case "bottom-center" -> "(main_w-overlay_w)/2:main_h-overlay_h-" + m;
             default              -> "main_w-overlay_w-" + m + ":main_h-overlay_h-" + m;
         };
-    }
-
-    private double getAudioDuration(Path audioPath) {
-        try {
-            List<String> command = List.of(
-                    ffprobePath.replace("/", "\\"),
-                    "-v", "error",
-                    "-show_entries", "format=duration",
-                    "-of", "default=noprint_wrappers=1:nokey=1",
-                    normalizePath(audioPath)
-            );
-
-            ProcessBuilder pb = new ProcessBuilder(command);
-            Process p = pb.start();
-
-            try (BufferedReader reader =
-                         new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-                String line = reader.readLine();
-                p.waitFor();
-                if (line != null && !line.isBlank()) {
-                    return Double.parseDouble(line.trim());
-                }
-            }
-        } catch (Exception e) {
-            log.warn("ffprobe failed ({}), defaulting to 60s", e.getMessage());
-        }
-        return 60.0;
-    }
-
-    private String formatSrtTimeDouble(double seconds) {
-        int h  = (int) (seconds / 3600);
-        int m  = (int) ((seconds % 3600) / 60);
-        int s  = (int) (seconds % 60);
-        int ms = (int) Math.round((seconds - Math.floor(seconds)) * 1000);
-        if (ms >= 1000) { ms = 0; s++; }
-        return String.format("%02d:%02d:%02d,%03d", h, m, s, ms);
     }
 
     private ExportResponse toResponse(ExportJob job) {
