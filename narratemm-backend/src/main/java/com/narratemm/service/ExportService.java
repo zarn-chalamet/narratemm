@@ -28,6 +28,7 @@ public class ExportService {
     private final TranscriptRepository transcriptRepository;
     private final ScriptRepository scriptRepository;
     private final VoiceOverRepository voiceOverRepository;
+    private final SubtitleRendererService subtitleRendererService;
 
     @Value("${app.tools.yt-dlp-path:yt-dlp}")
     private String ytDlpPath;
@@ -668,31 +669,42 @@ public class ExportService {
         return result.toString();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // FFMPEG ARG BUILDER
-    // ─────────────────────────────────────────────────────────────────────────
-
     private List<String> buildFFmpegArgs(Path source, Path projectDir, Path output,
-                                          ExportSettings settings, Path srtPath,
-                                          Path activeVoiceover) throws IOException {
+                                      ExportSettings settings, Path srtPath,
+                                      Path activeVoiceover) throws Exception {
 
         boolean hasVoiceover = activeVoiceover != null
-                && Files.exists(activeVoiceover)
-                && Files.size(activeVoiceover) > 0;
+                && Files.exists(activeVoiceover) && Files.size(activeVoiceover) > 0;
 
         Path logo = projectDir.resolve("logo.png");
         boolean hasLogo = Files.exists(logo);
 
-        boolean hasSrt = srtPath != null
-                && Files.exists(srtPath)
+        boolean hasSrt = srtPath != null && Files.exists(srtPath)
                 && Boolean.TRUE.equals(settings.getSubtitleEnabled());
 
         String[] wh = resolveResolution(settings.getAspectRatio()).split("x");
-        String w = wh[0], h = wh[1];
+        int videoW = Integer.parseInt(wh[0]);
+        int videoH = Integer.parseInt(wh[1]);
 
-        int    mix      = settings.getAudioMix() != null ? settings.getAudioMix() : 70;
-        float  origVol  = (100 - mix) / 100.0f;
-        float  voiceVol = mix          / 100.0f;
+        // ════════════════════════════════════════════════════════════
+        // STEP 1: Render Burmese subtitles to PNG using Java AWT
+        // ════════════════════════════════════════════════════════════
+        List<SubtitleRendererService.SubtitleFrame> subFrames = new ArrayList<>();
+        if (hasSrt) {
+            try {
+                Path framesDir = projectDir.resolve("subtitle_frames");
+                subFrames = subtitleRendererService.renderSubtitlesToPng(
+                        srtPath, framesDir, settings, videoW, videoH);
+                log.info("✅ Generated {} subtitle PNG frames", subFrames.size());
+            } catch (Exception e) {
+                log.error("Subtitle rendering failed: {}", e.getMessage(), e);
+                hasSrt = false;
+            }
+        }
+
+        int mix = settings.getAudioMix() != null ? settings.getAudioMix() : 70;
+        float origVol = (100 - mix) / 100.0f;
+        float voiceVol = mix / 100.0f;
 
         double alpha = (settings.getLogoOpacity() != null
                 ? settings.getLogoOpacity() : 80) / 100.0;
@@ -700,137 +712,96 @@ public class ExportService {
                 ? settings.getLogoSize() : 100) / 100.0);
         String logoPos = buildLogoPosition(settings);
 
-        // ── filter_complex ───────────────────────────────────────────────
+        // ════════════════════════════════════════════════════════════
+        // STEP 2: Build FFmpeg inputs
+        // ════════════════════════════════════════════════════════════
+        List<String> args = new ArrayList<>();
+        args.add(ffmpegPath.replace("/", "\\"));
+        args.add("-y");
+
+        // Input 0: video
+        args.add("-i"); args.add(normalizePath(source));
+        int inputIdx = 1;
+
+        int voiceInputIdx = -1;
+        if (hasVoiceover) {
+            args.add("-i"); args.add(normalizePath(activeVoiceover));
+            voiceInputIdx = inputIdx++;
+        }
+
+        int logoInputIdx = -1;
+        if (hasLogo) {
+            args.add("-i"); args.add(normalizePath(logo));
+            logoInputIdx = inputIdx++;
+        }
+
+        // Subtitle PNG inputs
+        List<int[]> subInputs = new ArrayList<>();
+        for (var frame : subFrames) {
+            args.add("-i"); args.add(normalizePath(frame.pngPath()));
+            subInputs.add(new int[]{
+                    inputIdx,
+                    (int) (frame.startSec() * 1000),
+                    (int) (frame.endSec() * 1000)
+            });
+            inputIdx++;
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // STEP 3: Build filter_complex
+        // ════════════════════════════════════════════════════════════
         StringBuilder filter = new StringBuilder();
 
         // 1. Scale + pad video
-        filter.append("[0:v]scale=").append(w).append(":").append(h)
-              .append(":force_original_aspect_ratio=decrease,")
-              .append("pad=").append(w).append(":").append(h)
-              .append(":(ow-iw)/2:(oh-ih)/2:black[scaled]");
+        filter.append("[0:v]scale=").append(videoW).append(":").append(videoH)
+            .append(":force_original_aspect_ratio=decrease,")
+            .append("pad=").append(videoW).append(":").append(videoH)
+            .append(":(ow-iw)/2:(oh-ih)/2:black[v0]");
+        String lastV = "v0";
 
-        String lastV = "scaled";
+        // 2. Overlay subtitle PNGs with time-based enable
+        for (int i = 0; i < subInputs.size(); i++) {
+            int[] sub = subInputs.get(i);
+            int idx = sub[0];
+            double startSec = sub[1] / 1000.0;
+            double endSec = sub[2] / 1000.0;
 
-        // 2. Subtitles
-        if (hasSrt) {
-            String srtForFilter = normalizePath(srtPath)
-                    .replace("\\", "/")
-                    .replaceFirst("^([A-Za-z]):/", "$1\\\\:/");
-
-            String font = (settings.getSubtitleFont() != null && !settings.getSubtitleFont().isBlank())
-                    ? settings.getSubtitleFont() : "Pyidaungsu";
-            int fontSize = settings.getSubtitleSize() != null ? settings.getSubtitleSize() : 22;
-
-            int videoWidth = Integer.parseInt(w);
-            int videoHeight = Integer.parseInt(h);
-
-            //Custom position (defaults: bottom-center at y=0.85)
-            double subY = settings.getSubtitleY() != null ? settings.getSubtitleY() : 0.85;
-            
-            // MarginV = distance from BOTTOM of video to caption baseline
-            int marginV = Math.max(20, (int) ((1.0 - subY) * videoHeight));
-
-            //Custom width: controls horizontal margin (narrower box = bigger margins)
-            int widthPercent = settings.getSubtitleWidth() != null ? settings.getSubtitleWidth() : 92;
-            int marginH = (int) (((100 - widthPercent) / 2.0) * videoWidth / 100.0);
-
-            //Colors (libass uses BGR + inverted alpha)
-            String fontColor    = hexToAss(settings.getSubtitleFontColor(),    "&H00FFFFFF");
-            String bgColor      = hexToAss(settings.getSubtitleBgColor(),      "&H80000000");
-            String outlineColor = hexToAss(settings.getSubtitleOutlineColor(), "&H00000000");
-
-            //Border style mapping (libass)
-            String borderStyleStr = settings.getSubtitleBorderStyle() != null
-                    ? settings.getSubtitleBorderStyle().toLowerCase() : "outline";
-            int borderStyle, outline, shadow;
-            switch (borderStyleStr) {
-                case "box":
-                    borderStyle = 3;    // opaque box
-                    outline = 4;        // box padding
-                    shadow = 0;
-                    break;
-                case "shadow":
-                    borderStyle = 1;
-                    outline = 0;
-                    shadow = 2;
-                    break;
-                case "none":
-                    borderStyle = 1;
-                    outline = 0;
-                    shadow = 0;
-                    break;
-                case "outline":
-                default:
-                    borderStyle = 1;
-                    outline = settings.getSubtitleOutlineWidth() != null
-                            ? settings.getSubtitleOutlineWidth() : 2;
-                    shadow = 1;
-                    break;
-            }
-
-            log.info("Subtitle style | y={} marginV={} width={}% marginH={} border={}",
-                    subY, marginV, widthPercent, marginH, borderStyleStr);
-
-            filter.append(";[").append(lastV).append("]")
-                .append("subtitles=filename='").append(srtForFilter).append("'")
-                .append(":original_size=").append(videoWidth).append("x").append(videoHeight)
-                .append(":force_style='")
-                .append("FontName=").append(font).append(",")
-                .append("FontSize=").append(fontSize).append(",")
-                .append("PrimaryColour=").append(fontColor).append(",")
-                .append("OutlineColour=").append(outlineColor).append(",")
-                .append("BackColour=").append(bgColor).append(",")
-                .append("BorderStyle=").append(borderStyle).append(",")
-                .append("Outline=").append(outline).append(",")
-                .append("Shadow=").append(shadow).append(",")
-                .append("MarginV=").append(marginV).append(",")
-                .append("MarginL=").append(marginH).append(",")
-                .append("MarginR=").append(marginH).append(",")
-                .append("Alignment=2,")
-                .append("WrapStyle=0")
-                .append("'[subtitled]");
-            lastV = "subtitled";
+            String nextV = "vs" + i;
+            filter.append(";[").append(lastV).append("][").append(idx).append(":v]")
+                .append("overlay=0:0:enable='between(t,")
+                .append(String.format(Locale.US, "%.3f", startSec))
+                .append(",")
+                .append(String.format(Locale.US, "%.3f", endSec))
+                .append(")'[").append(nextV).append("]");
+            lastV = nextV;
         }
 
         // 3. Logo overlay
-        // Input index: 0=video, 1=voiceover (if any), last=logo
-        int logoInputIdx = hasVoiceover ? 2 : 1;
         if (hasLogo) {
             filter.append(";[").append(logoInputIdx).append(":v]")
-                  .append("scale=").append(logoW).append(":-1,")
-                  .append("format=rgba,")
-                  .append("colorchannelmixer=aa=")
-                  .append(String.format(Locale.US, "%.2f", alpha))
-                  .append("[logo]")
-                  .append(";[").append(lastV).append("][logo]overlay=")
-                  .append(logoPos).append("[finalv]");
+                .append("scale=").append(logoW).append(":-1,")
+                .append("format=rgba,")
+                .append("colorchannelmixer=aa=")
+                .append(String.format(Locale.US, "%.2f", alpha))
+                .append("[logo]")
+                .append(";[").append(lastV).append("][logo]overlay=")
+                .append(logoPos).append("[finalv]");
             lastV = "finalv";
         }
 
         // 4. Audio mix
         if (hasVoiceover) {
             filter.append(";[0:a]volume=")
-                  .append(String.format(Locale.US, "%.2f", origVol)).append("[a0]")
-                  .append(";[1:a]volume=")
-                  .append(String.format(Locale.US, "%.2f", voiceVol)).append("[a1]")
-                  .append(";[a0][a1]amix=inputs=2:duration=first[aout]");
+                .append(String.format(Locale.US, "%.2f", origVol)).append("[a0]")
+                .append(";[").append(voiceInputIdx).append(":a]volume=")
+                .append(String.format(Locale.US, "%.2f", voiceVol)).append("[a1]")
+                .append(";[a0][a1]amix=inputs=2:duration=first[aout]");
         }
 
-        // ── Assemble args ────────────────────────────────────────────────
-        List<String> args = new ArrayList<>();
-        args.add(ffmpegPath.replace("/", "\\"));
-        args.add("-y");
-
-        args.add("-i"); args.add(normalizePath(source));
-        if (hasVoiceover) {
-            args.add("-i"); args.add(normalizePath(activeVoiceover));
-        }
-        if (hasLogo) {
-            args.add("-i"); args.add(normalizePath(logo));
-        }
-
+        // ════════════════════════════════════════════════════════════
+        // STEP 4: Output args
+        // ════════════════════════════════════════════════════════════
         args.add("-filter_complex"); args.add(filter.toString());
-
         args.add("-map"); args.add("[" + lastV + "]");
         if (hasVoiceover) {
             args.add("-map"); args.add("[aout]");
@@ -838,18 +809,18 @@ public class ExportService {
             args.add("-map"); args.add("0:a?");
         }
 
-        args.add("-c:v");      args.add("libx264");
-        args.add("-preset");   args.add("fast");
-        args.add("-crf");      args.add("23");
-        args.add("-c:a");      args.add("aac");
-        args.add("-b:a");      args.add("192k");
+        args.add("-c:v"); args.add("libx264");
+        args.add("-preset"); args.add("fast");
+        args.add("-crf"); args.add("23");
+        args.add("-c:a"); args.add("aac");
+        args.add("-b:a"); args.add("192k");
         args.add("-movflags"); args.add("+faststart");
-        args.add("-shortest"); // stop at shortest stream (video)
+        args.add("-shortest");
 
         args.add(normalizePath(output));
         return args;
     }
-
+    
     // ─────────────────────────────────────────────────────────────────────────
     // VIDEO SOURCE
     // ─────────────────────────────────────────────────────────────────────────

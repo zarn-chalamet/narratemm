@@ -39,14 +39,14 @@ export const ProjectPage: React.FC = () => {
     logoOpacity: 80, 
     subtitleEnabled: true, 
     subtitleFont: 'Noto Serif Myanmar', 
-    subtitleSize: 24, 
+    subtitleSize: 56, 
     audioMix: 70, 
     subtitleLanguage: 'burmese',
     subtitleX: 0.5,
     subtitleY: 0.85,
     subtitleWidth: 80,
     subtitleFontColor: '#FFFFFF',
-    subtitleBgColor: '#80000000',
+    subtitleBgColor: '#CC000000',
     subtitleBorderStyle: 'outline',
     subtitleOutlineColor: '#000000',
     subtitleOutlineWidth: 2,
@@ -596,10 +596,10 @@ const Step4VoiceOver: React.FC<any> = ({ project, voiceOver, setVoiceOver, isPro
 const FONT_SIZE_RECOMMENDATIONS: Record<string, { 
   min: number; max: number; recommended: number; reason: string 
 }> = {
-  '9:16':  { min: 18, max: 32, recommended: 22, reason: 'TikTok/Reels - vertical, mobile-first' },
-  '4:5':   { min: 20, max: 36, recommended: 26, reason: 'Instagram feed - balanced readability' },
-  '1:1':   { min: 22, max: 38, recommended: 28, reason: 'Square - centered focus' },
-  '16:9':  { min: 24, max: 48, recommended: 32, reason: 'YouTube/landscape - wider canvas' },
+  '9:16':  { min: 42, max: 80, recommended: 56, reason: 'TikTok/Reels - vertical, mobile-first' },
+  '4:5':   { min: 44, max: 84, recommended: 60, reason: 'Instagram feed - balanced readability' },
+  '1:1':   { min: 46, max: 88, recommended: 64, reason: 'Square - centered focus' },
+  '16:9':  { min: 48, max: 96, recommended: 72, reason: 'YouTube/landscape - wider canvas' },
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1776,8 +1776,26 @@ const SubtitleStyleEditor: React.FC<SubtitleStyleEditorProps> = ({
 
   // ─── Build CSS preview style ─────────────────────────────────
   const getCaptionStyle = (): React.CSSProperties => {
+    // Preview frame is ~400px tall, real video is 1920px (for 9:16)
+    // Scale ratio: 400/1920 ≈ 0.208
+    // So 56px real → ~12px preview, 80px real → ~17px preview
+    
+    // Get scale based on aspect ratio
+    const previewHeight = 400; // matches our preview frame max height
+    const videoHeights: Record<string, number> = {
+      '9:16': 1920,
+      '4:5':  1350,
+      '1:1':  1080,
+      '16:9': 1080,
+    };
+    const realHeight = videoHeights[aspectRatio] || 1920;
+    const scale = previewHeight / realHeight;
+    
+    const realFontSize = settings.subtitleSize || 56;
+    const previewFontSize = Math.max(8, realFontSize * scale);
+    
     const base: React.CSSProperties = {
-      fontSize: `${Math.min((settings.subtitleSize || 24) * 0.4, 18)}px`,
+      fontSize: `${previewFontSize}px`,
       fontFamily: settings.subtitleFont || 'Pyidaungsu',
       color: fontColor,
       padding: '4px 10px',
@@ -1787,6 +1805,7 @@ const SubtitleStyleEditor: React.FC<SubtitleStyleEditorProps> = ({
       maxWidth: '100%',
       wordBreak: 'break-word',
     };
+    
     switch (borderStyle) {
       case 'box':
         return { ...base, backgroundColor: bgColor };
@@ -1795,15 +1814,16 @@ const SubtitleStyleEditor: React.FC<SubtitleStyleEditorProps> = ({
       case 'none':
         return base;
       case 'outline':
-      default:
-        const o = outlineWidth;
-        const c = outlineColor;
-        return {
-          ...base,
-          textShadow: `${o}px ${o}px 0 ${c}, -${o}px -${o}px 0 ${c}, ${o}px -${o}px 0 ${c}, -${o}px ${o}px 0 ${c}, ${o}px 0 0 ${c}, -${o}px 0 0 ${c}, 0 ${o}px 0 ${c}, 0 -${o}px 0 ${c}`,
-        };
+      default: {
+          const o = Math.max(1, outlineWidth * scale * 4);
+          const c = outlineColor;
+          return {
+            ...base,
+            textShadow: `${o}px ${o}px 0 ${c}, -${o}px -${o}px 0 ${c}, ${o}px -${o}px 0 ${c}, -${o}px ${o}px 0 ${c}, ${o}px 0 0 ${c}, -${o}px 0 0 ${c}, 0 ${o}px 0 ${c}, 0 -${o}px 0 ${c}`,
+          };
+      }
     }
-  };
+};
 
   const isInteracting = mode !== 'idle';
 
@@ -1967,18 +1987,27 @@ const SubtitleStyleEditor: React.FC<SubtitleStyleEditorProps> = ({
           <div className="flex items-center gap-2 bg-[#0d0d14] border border-[#2a2a3e] rounded-lg p-2">
             <input
               type="color"
-              value={borderStyle === 'box' ? bgColor.slice(0, 7) : outlineColor}
-              onChange={(e) =>
-                onChange(
-                  borderStyle === 'box'
-                    ? { subtitleBgColor: e.target.value + '80' }  // 50% opacity
-                    : { subtitleOutlineColor: e.target.value }
-                )
+              value={
+                borderStyle === 'box' 
+                  ? (bgColor.length === 9 ? '#' + bgColor.slice(3, 9) : bgColor.slice(0, 7))
+                  : outlineColor
               }
+              onChange={(e) => {
+                if (borderStyle === 'box') {
+                  // Format: #AARRGGBB → alpha goes FIRST (CC = 80% opacity)
+                  const colorHex = e.target.value.replace('#', '');
+                  onChange({ subtitleBgColor: '#CC' + colorHex });
+                } else {
+                  onChange({ subtitleOutlineColor: e.target.value });
+                }
+              }}
               className="w-8 h-8 rounded cursor-pointer bg-transparent border-0"
             />
             <span className="text-xs text-gray-300 font-mono">
-              {(borderStyle === 'box' ? bgColor.slice(0, 7) : outlineColor).toUpperCase()}
+              {(borderStyle === 'box' 
+                ? (bgColor.length === 9 ? '#' + bgColor.slice(3, 9) : bgColor.slice(0, 7))
+                : outlineColor
+              ).toUpperCase()}
             </span>
           </div>
         </div>
