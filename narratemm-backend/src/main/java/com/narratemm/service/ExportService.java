@@ -67,6 +67,8 @@ public class ExportService {
                 .aspectRatio(settings.getAspectRatio())
                 .logoPath(settings.getLogoPath())
                 .logoPosition(settings.getLogoPosition())
+                .logoX(settings.getLogoX())
+                .logoY(settings.getLogoY()) 
                 .logoSize(settings.getLogoSize())
                 .logoOpacity(settings.getLogoOpacity())
                 .subtitleEnabled(settings.getSubtitleEnabled())
@@ -663,7 +665,7 @@ public class ExportService {
                 ? settings.getLogoOpacity() : 80) / 100.0;
         int logoW = (int) (200.0 * (settings.getLogoSize() != null
                 ? settings.getLogoSize() : 100) / 100.0);
-        String logoPos = buildLogoPosition(settings.getLogoPosition());
+        String logoPos = buildLogoPosition(settings);
 
         // ── filter_complex ───────────────────────────────────────────────
         StringBuilder filter = new StringBuilder();
@@ -1000,19 +1002,39 @@ public class ExportService {
         };
     }
 
-    private String buildLogoPosition(String position) {
-        int m = 20;
+    private String buildLogoPosition(ExportSettings settings) {
+        int margin = 20;
+
+        // PRIORITY 1: Use exact X/Y coordinates if provided
+        if (settings.getLogoX() != null && settings.getLogoY() != null) {
+            double x = Math.max(0.0, Math.min(1.0, settings.getLogoX()));
+            double y = Math.max(0.0, Math.min(1.0, settings.getLogoY()));
+            
+            log.info("Using custom logo position: x={}, y={}", x, y);
+            
+            // FFmpeg formula:
+            //   (main_w - overlay_w) * x → horizontal position (logo top-left)
+            //   (main_h - overlay_h) * y → vertical position
+            // Result: x=0 logo at left edge, x=1 at right edge, x=0.5 centered
+            return String.format(Locale.US,
+                    "(main_w-overlay_w)*%.4f:(main_h-overlay_h)*%.4f",
+                    x, y);
+        }
+
+        // PRIORITY 2: Fall back to preset position names
+        String position = settings.getLogoPosition();
         if (position == null) position = "bottom-right";
+        
         return switch (position) {
-            case "top-left"      -> m + ":" + m;
-            case "top-center"    -> "(main_w-overlay_w)/2:" + m;
-            case "top-right"     -> "main_w-overlay_w-" + m + ":" + m;
-            case "center-left"   -> m + ":(main_h-overlay_h)/2";
+            case "top-left"      -> margin + ":" + margin;
+            case "top-center"    -> "(main_w-overlay_w)/2:" + margin;
+            case "top-right"     -> "main_w-overlay_w-" + margin + ":" + margin;
+            case "center-left"   -> margin + ":(main_h-overlay_h)/2";
             case "center"        -> "(main_w-overlay_w)/2:(main_h-overlay_h)/2";
-            case "center-right"  -> "main_w-overlay_w-" + m + ":(main_h-overlay_h)/2";
-            case "bottom-left"   -> m + ":main_h-overlay_h-" + m;
-            case "bottom-center" -> "(main_w-overlay_w)/2:main_h-overlay_h-" + m;
-            default              -> "main_w-overlay_w-" + m + ":main_h-overlay_h-" + m;
+            case "center-right"  -> "main_w-overlay_w-" + margin + ":(main_h-overlay_h)/2";
+            case "bottom-left"   -> margin + ":main_h-overlay_h-" + margin;
+            case "bottom-center" -> "(main_w-overlay_w)/2:main_h-overlay_h-" + margin;
+            default              -> "main_w-overlay_w-" + margin + ":main_h-overlay_h-" + margin;
         };
     }
 

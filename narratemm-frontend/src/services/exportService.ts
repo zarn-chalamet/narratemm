@@ -4,6 +4,8 @@ export interface ExportSettings {
   aspectRatio: string;
   logoPath?: string;
   logoPosition?: string;
+  logoX?: number;
+  logoY?: number;
   logoSize?: number;
   logoOpacity?: number;
   subtitleEnabled?: boolean;

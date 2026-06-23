@@ -14,6 +14,10 @@ public class ExportDTOs {
         private String logoPosition;
         private Integer logoSize;
         private Integer logoOpacity;
+
+        private Double logoX;   // 0.0 = left, 1.0 = right
+        private Double logoY;   // 0.0 = top,  1.0 = bottom
+
         private Boolean subtitleEnabled;
         private String subtitleFont;
         private Integer subtitleSize;

@@ -39,6 +39,13 @@ public class ExportJob {
     private String logoPosition;
     private Integer logoSize;
     private Integer logoOpacity;
+
+    @Column(name = "logo_x")
+    private Double logoX;
+
+    @Column(name = "logo_y")
+    private Double logoY;
+
     @Builder.Default
     private Boolean subtitleEnabled = true;
     private String subtitleFont;
