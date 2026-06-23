@@ -35,6 +35,15 @@ public class ExportController {
         return ResponseEntity.ok(exportService.getStatus(jobId));
     }
 
+    @GetMapping("/project/{projectId}/latest")
+    public ResponseEntity<ExportResponse> getLatestForProject(@PathVariable String projectId) {
+        ExportResponse latest = exportService.getLatestForProject(projectId);
+        if (latest == null) {
+            return ResponseEntity.noContent().build(); // 204 = no previous export
+        }
+        return ResponseEntity.ok(latest);
+    }
+
     @GetMapping("/download/{jobId}")
     public ResponseEntity<Resource> download(@PathVariable String jobId) {
         Resource resource = exportService.getDownloadResource(jobId);

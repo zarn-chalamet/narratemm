@@ -7,12 +7,19 @@ import com.narratemm.security.SecurityUtils;
 import com.narratemm.service.StorageService;
 import lombok.RequiredArgsConstructor;
 
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 @RestController
 @RequestMapping("/api/upload")
@@ -95,5 +102,27 @@ public class UploadController {
                 .logoPath(logoPath)
                 .message("Logo uploaded successfully")
                 .build());
+    }
+
+    @GetMapping("/logo/{projectId}")
+    public ResponseEntity<Resource> getLogo(@PathVariable String projectId) {
+        String userId = SecurityUtils.getCurrentUserId();
+        projectRepository.findByIdAndUserId(projectId, userId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Project not found"));
+
+        Path logoPath = storageService.getLogoPath(projectId);
+
+        if (!Files.exists(logoPath)) {
+            return ResponseEntity.notFound().build();
+        }
+
+        Resource resource = new FileSystemResource(logoPath.toFile());
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.IMAGE_PNG)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"logo.png\"")
+                .cacheControl(CacheControl.noCache())
+                .body(resource);
     }
 }

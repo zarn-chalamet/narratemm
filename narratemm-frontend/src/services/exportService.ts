@@ -24,6 +24,19 @@ export interface ExportResponse {
   errorMessage: string | null;
   startedAt: string;
   completedAt: string | null;
+
+  aspectRatio?: string;
+  logoPath?: string;
+  logoPosition?: string;
+  logoX?: number;
+  logoY?: number;
+  logoSize?: number;
+  logoOpacity?: number;
+  subtitleEnabled?: boolean;
+  subtitleFont?: string;
+  subtitleSize?: number;
+  audioMix?: number;
+  subtitleLanguage?: string;
 }
 
 export interface LogoUploadResponse {
@@ -46,6 +59,25 @@ export const exportService = {
   getStatus: async (jobId: string): Promise<ExportResponse> => {
     const response = await api.get<ExportResponse>(`/export/status/${jobId}`);
     return response.data;
+  },
+
+  getLatest: async (projectId: string): Promise<ExportResponse | null> => {
+    try {
+      const response = await api.get<ExportResponse>(
+        `/export/project/${projectId}/latest`
+      );
+      // 204 No Content means no previous export exists
+      if (response.status === 204) return null;
+
+      return response.data;
+    } catch (err: any) {
+      // 404 or other "not found" responses → no previous export
+      if (err.response?.status === 404 || err.response?.status === 204) {
+        return null;
+      }
+      console.error('Failed to fetch latest export:', err);
+      return null;
+    }
   },
 
   getDownloadUrl: (jobId: string): string => {

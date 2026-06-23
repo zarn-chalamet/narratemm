@@ -89,6 +89,13 @@ public class ExportService {
         return toResponse(job);
     }
 
+    public ExportResponse getLatestForProject(String projectId) {
+        return exportJobRepository
+                .findTopByProjectIdOrderByStartedAtDesc(projectId)
+                .map(this::toResponse)
+                .orElse(null);
+    }
+
     public Resource getDownloadResource(String jobId) {
         ExportJob job = exportJobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Export job not found"));
@@ -1068,6 +1075,18 @@ public class ExportService {
                         ? job.getStartedAt().toString()    : null)
                 .completedAt(job.getCompletedAt() != null
                         ? job.getCompletedAt().toString() : null)
+                        .aspectRatio(job.getAspectRatio())
+                .logoPath(job.getLogoPath())
+                .logoPosition(job.getLogoPosition())
+                .logoX(job.getLogoX())
+                .logoY(job.getLogoY())
+                .logoSize(job.getLogoSize())
+                .logoOpacity(job.getLogoOpacity())
+                .subtitleEnabled(job.getSubtitleEnabled())
+                .subtitleFont(job.getSubtitleFont())
+                .subtitleSize(job.getSubtitleSize())
+                .audioMix(job.getAudioMix())
+                .subtitleLanguage(job.getSubtitleLanguage())
                 .build();
     }
 }

@@ -45,7 +45,20 @@ public class ExportDTOs {
         private String errorMessage;
         private String startedAt;
         private String completedAt;
-    }
+
+        private String aspectRatio;
+        private String logoPath;
+        private String logoPosition;
+        private Double logoX;
+        private Double logoY;
+        private Integer logoSize;
+        private Integer logoOpacity;
+        private Boolean subtitleEnabled;
+        private String subtitleFont;
+        private Integer subtitleSize;
+        private Integer audioMix;
+        private String subtitleLanguage;
+        }
 
     @Data
     @Builder

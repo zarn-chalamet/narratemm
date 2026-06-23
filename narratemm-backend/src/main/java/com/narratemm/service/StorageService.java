@@ -92,6 +92,10 @@ public class StorageService {
         return Paths.get(basePath, "projects", projectId);
     }
 
+    public Path getLogoPath(String projectId) {
+        return Paths.get(basePath, "projects", projectId).toAbsolutePath().resolve("logo.png");
+    }
+
     public void deleteProjectDirectory(String projectId) {
         try {
             Path dir = Paths.get(basePath, "projects", projectId);

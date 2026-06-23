@@ -609,6 +609,41 @@ const Step5Edit: React.FC<{
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  console.log('🟢 Step5Edit MOUNTED with projectId:', projectId);
+
+  useEffect(() => {
+    let cancelled = false;
+     console.log('🔵 Step5Edit useEffect FIRED, projectId:', projectId);
+    const loadExistingSettings = async () => {
+      if (!projectId) return;
+      try {
+        const latestJob = await exportService.getLatest(projectId);
+        if (cancelled || !latestJob) return;
+        
+        console.log('📥 Restored settings from previous export:', latestJob);
+        setExportSettings((prev: any) => ({
+          ...prev,
+          aspectRatio:       latestJob.aspectRatio       ?? prev.aspectRatio,
+          logoPath:          latestJob.logoPath          ?? prev.logoPath,
+          logoPosition:      latestJob.logoPosition      ?? prev.logoPosition,
+          logoX:             latestJob.logoX             ?? prev.logoX,
+          logoY:             latestJob.logoY             ?? prev.logoY,
+          logoSize:          latestJob.logoSize          ?? prev.logoSize,
+          logoOpacity:       latestJob.logoOpacity       ?? prev.logoOpacity,
+          subtitleEnabled:   latestJob.subtitleEnabled   ?? prev.subtitleEnabled,
+          subtitleFont:      latestJob.subtitleFont      ?? prev.subtitleFont,
+          subtitleSize:      latestJob.subtitleSize      ?? prev.subtitleSize,
+          audioMix:          latestJob.audioMix          ?? prev.audioMix,
+          subtitleLanguage:  latestJob.subtitleLanguage  ?? prev.subtitleLanguage,
+        }));
+      } catch (err) {
+        console.log('No previous export settings found');
+      }
+    };
+    loadExistingSettings();
+    return () => { cancelled = true; };
+  }, [projectId]);
+
   // Restore logo preview from backend when returning to step
   useEffect(() => {
     if (exportSettings.logoPath && !logoPreview) {
@@ -940,6 +975,27 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
       } catch (err) { console.error('Poll error:', err); }
     }, 2000);
   };
+
+  //Restore previous completed export
+  useEffect(() => {
+    let cancelled = false;
+    const loadExistingJob = async () => {
+      if (!project?.id || exportJob) return;
+      try {
+        const latestJob = await exportService.getLatest(project.id);
+        if (cancelled) return;
+        
+        if (latestJob && latestJob.status === 'done') {
+          console.log('📥 Restored previous export job:', latestJob);
+          setExportJob(latestJob);
+        }
+      } catch (err) {
+        console.log('No previous export found');
+      }
+    };
+    loadExistingJob();
+    return () => { cancelled = true; };
+  }, [project?.id]);
 
   const isActiveRef = useRef(false);
   useEffect(() => {
