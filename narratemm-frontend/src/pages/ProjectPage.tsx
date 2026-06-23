@@ -42,6 +42,14 @@ export const ProjectPage: React.FC = () => {
     subtitleSize: 24, 
     audioMix: 70, 
     subtitleLanguage: 'burmese',
+    subtitleX: 0.5,
+    subtitleY: 0.85,
+    subtitleWidth: 80,
+    subtitleFontColor: '#FFFFFF',
+    subtitleBgColor: '#80000000',
+    subtitleBorderStyle: 'outline',
+    subtitleOutlineColor: '#000000',
+    subtitleOutlineWidth: 2,
   });
   const [exportJob, setExportJob] = useState<any>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -635,6 +643,14 @@ const Step5Edit: React.FC<{
           subtitleSize:      latestJob.subtitleSize      ?? prev.subtitleSize,
           audioMix:          latestJob.audioMix          ?? prev.audioMix,
           subtitleLanguage:  latestJob.subtitleLanguage  ?? prev.subtitleLanguage,
+          subtitleX:           latestJob.subtitleX           ?? prev.subtitleX,
+          subtitleY:           latestJob.subtitleY           ?? prev.subtitleY,
+          subtitleWidth:       latestJob.subtitleWidth       ?? prev.subtitleWidth,
+          subtitleFontColor:   latestJob.subtitleFontColor   ?? prev.subtitleFontColor,
+          subtitleBgColor:     latestJob.subtitleBgColor     ?? prev.subtitleBgColor,
+          subtitleBorderStyle: latestJob.subtitleBorderStyle ?? prev.subtitleBorderStyle,
+          subtitleOutlineColor:latestJob.subtitleOutlineColor?? prev.subtitleOutlineColor,
+          subtitleOutlineWidth:latestJob.subtitleOutlineWidth?? prev.subtitleOutlineWidth,
         }));
       } catch (err) {
         console.log('No previous export settings found');
@@ -874,30 +890,14 @@ const Step5Edit: React.FC<{
                       )}
                     </div>
                   </div>
-
-                  <div className="mt-3 p-4 bg-[#0d0d14] border border-[#2a2a3e] rounded-lg">
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-xs text-gray-500">
-                        {script?.content ? 'Live Preview (from your script)' : 'Preview (sample text)'}
-                      </p>
-                      <span className="text-xs text-gray-600 font-mono">{exportSettings.subtitleSize}px</span>
-                    </div>
-                    <div className="relative bg-gradient-to-br from-gray-800 to-gray-900 rounded-md overflow-hidden mx-auto" 
-                      style={{ 
-                        aspectRatio: exportSettings.aspectRatio?.replace(':', '/') || '9/16',
-                        maxHeight: '200px', maxWidth: '100%',
-                      }}>
-                      <div className="absolute inset-0 flex items-center justify-center text-gray-700 text-xs">🎬 Video Area</div>
-                      <div className="absolute bottom-3 left-2 right-2 text-center">
-                        <p className="text-white inline-block px-2 py-1 leading-tight"
-                          style={{ 
-                            fontSize: `${Math.min(exportSettings.subtitleSize * 0.35, 16)}px`,
-                            fontFamily: exportSettings.subtitleFont,
-                            textShadow: '1px 1px 2px black, -1px -1px 2px black, 1px -1px 2px black, -1px 1px 2px black',
-                          }}>{previewText}</p>
-                      </div>
-                    </div>
-                  </div>
+                  
+                  {/* transcript style editor */}
+                  <SubtitleStyleEditor
+                    aspectRatio={exportSettings.aspectRatio || '9:16'}
+                    settings={exportSettings}
+                    previewText={previewText}
+                    onChange={updateMultipleSettings}
+                  />
                 </div>
               </div>
             )}
@@ -1037,6 +1037,14 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
       subtitleSize: exportSettings.subtitleSize,
       audioMix: exportSettings.audioMix,
       subtitleLanguage: exportSettings.subtitleLanguage || 'burmese',
+      subtitleX: exportSettings.subtitleX,
+      subtitleY: exportSettings.subtitleY,
+      subtitleWidth: exportSettings.subtitleWidth,
+      subtitleFontColor: exportSettings.subtitleFontColor,
+      subtitleBgColor: exportSettings.subtitleBgColor,
+      subtitleBorderStyle: exportSettings.subtitleBorderStyle,
+      subtitleOutlineColor: exportSettings.subtitleOutlineColor,
+      subtitleOutlineWidth: exportSettings.subtitleOutlineWidth,
     };
     console.log('🎬 EXPORT SETTINGS:', settingsToSend);
     try {
@@ -1657,6 +1665,368 @@ const ExportDoneView: React.FC<ExportDoneViewProps> = ({
           </div>
         </div>
       </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// SUBTITLE STYLE EDITOR — drag position + resize width
+// ─────────────────────────────────────────────────────────────────────────
+interface SubtitleStyleEditorProps {
+  aspectRatio: string;
+  settings: any;
+  previewText: string;
+  onChange: (updates: Record<string, any>) => void;
+}
+
+const SubtitleStyleEditor: React.FC<SubtitleStyleEditorProps> = ({
+  aspectRatio, settings, previewText, onChange,
+}) => {
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [mode, setMode] = useState<'idle' | 'drag' | 'resize-left' | 'resize-right'>('idle');
+  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const dragStartRef = useRef<{ x: number; y: number; width: number; mouseX: number } | null>(null);
+
+  const subX = settings.subtitleX ?? 0.5;
+  const subY = settings.subtitleY ?? 0.85;
+  const width = settings.subtitleWidth ?? 80;
+  const fontColor = settings.subtitleFontColor ?? '#FFFFFF';
+  const bgColor = settings.subtitleBgColor ?? '#80000000';
+  const borderStyle = settings.subtitleBorderStyle ?? 'outline';
+  const outlineColor = settings.subtitleOutlineColor ?? '#000000';
+  const outlineWidth = settings.subtitleOutlineWidth ?? 2;
+
+  const currentY = mode === 'drag' && dragPos ? dragPos.y : subY;
+  const currentX = mode === 'drag' && dragPos ? dragPos.x : subX;
+  const currentWidth = (mode === 'resize-left' || mode === 'resize-right') && dragWidth !== null
+    ? dragWidth : width;
+  const cssAspectRatio = aspectRatio.replace(':', ' / ');
+
+  // ─── Mouse Down Handlers ─────────────────────────────────────
+  const handleDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMode('drag');
+  };
+
+  const handleResizeStart = (side: 'left' | 'right') => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!frameRef.current) return;
+    const rect = frameRef.current.getBoundingClientRect();
+    dragStartRef.current = {
+      x: currentX,
+      y: currentY,
+      width: currentWidth,
+      mouseX: e.clientX - rect.left,
+    };
+    setMode(side === 'left' ? 'resize-left' : 'resize-right');
+  };
+
+  // ─── Mouse Move + Up ─────────────────────────────────────────
+  useEffect(() => {
+    if (mode === 'idle') return;
+
+    const handleMove = (e: MouseEvent) => {
+      if (!frameRef.current) return;
+      const rect = frameRef.current.getBoundingClientRect();
+      const relX = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const relY = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+
+      if (mode === 'drag') {
+        setDragPos({ x: relX, y: relY });
+      } else if (mode === 'resize-left' || mode === 'resize-right') {
+        if (!dragStartRef.current) return;
+        const startMouseRel = dragStartRef.current.mouseX / rect.width;
+        const currentMouseRel = relX;
+        const delta = currentMouseRel - startMouseRel;
+        
+        // Resizing changes width by 2x delta (both sides move opposite)
+        const sign = mode === 'resize-right' ? 1 : -1;
+        const newWidthPct = Math.max(30, Math.min(100, 
+          dragStartRef.current.width + sign * delta * 200
+        ));
+        setDragWidth(Math.round(newWidthPct));
+      }
+    };
+
+    const handleUp = () => {
+      if (mode === 'drag' && dragPos) {
+        onChange({
+          subtitleX: parseFloat(dragPos.x.toFixed(4)),
+          subtitleY: parseFloat(dragPos.y.toFixed(4)),
+        });
+      } else if ((mode === 'resize-left' || mode === 'resize-right') && dragWidth !== null) {
+        onChange({ subtitleWidth: dragWidth });
+      }
+      setMode('idle');
+      setDragPos(null);
+      setDragWidth(null);
+      dragStartRef.current = null;
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [mode, dragPos, dragWidth, onChange]);
+
+  // ─── Build CSS preview style ─────────────────────────────────
+  const getCaptionStyle = (): React.CSSProperties => {
+    const base: React.CSSProperties = {
+      fontSize: `${Math.min((settings.subtitleSize || 24) * 0.4, 18)}px`,
+      fontFamily: settings.subtitleFont || 'Pyidaungsu',
+      color: fontColor,
+      padding: '4px 10px',
+      borderRadius: '2px',
+      lineHeight: 1.3,
+      display: 'inline-block',
+      maxWidth: '100%',
+      wordBreak: 'break-word',
+    };
+    switch (borderStyle) {
+      case 'box':
+        return { ...base, backgroundColor: bgColor };
+      case 'shadow':
+        return { ...base, textShadow: '2px 2px 4px rgba(0,0,0,0.85)' };
+      case 'none':
+        return base;
+      case 'outline':
+      default:
+        const o = outlineWidth;
+        const c = outlineColor;
+        return {
+          ...base,
+          textShadow: `${o}px ${o}px 0 ${c}, -${o}px -${o}px 0 ${c}, ${o}px -${o}px 0 ${c}, -${o}px ${o}px 0 ${c}, ${o}px 0 0 ${c}, -${o}px 0 0 ${c}, 0 ${o}px 0 ${c}, 0 -${o}px 0 ${c}`,
+        };
+    }
+  };
+
+  const isInteracting = mode !== 'idle';
+
+  return (
+    <div className="space-y-5">
+      {/* ─── Header ─────────────────────────────────────────── */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <label className="text-sm font-medium text-gray-300">Caption Position & Style</label>
+        <span className="text-xs text-violet-400 bg-violet-500/10 px-2 py-1 rounded font-mono">
+          X:{(currentX * 100).toFixed(0)}% Y:{(currentY * 100).toFixed(0)}% W:{currentWidth}%
+        </span>
+      </div>
+
+      {/* ─── Preview Frame ──────────────────────────────────── */}
+      <div className="bg-[#0d0d14] border border-[#2a2a3e] rounded-xl p-4">
+        <div className="flex items-center justify-center">
+          <div
+            ref={frameRef}
+            className="relative bg-gradient-to-br from-gray-800 to-gray-900 rounded-lg overflow-hidden shadow-2xl select-none"
+            style={{
+              aspectRatio: cssAspectRatio,
+              maxHeight: '400px',
+              maxWidth: '100%',
+              height: aspectRatio === '16:9' ? 'auto' : '400px',
+              width: aspectRatio === '16:9' ? '100%' : 'auto',
+            }}
+          >
+            {/* Grid */}
+            <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none">
+              {Array.from({ length: 9 }).map((_, i) => (
+                <div key={i} className="border border-white/5" />
+              ))}
+            </div>
+
+            <div className="absolute inset-0 flex items-center justify-center text-gray-600 text-xs pointer-events-none">
+              🎬 Video Preview
+            </div>
+
+            {/* Caption box with resize handles */}
+            <div
+              className="absolute pointer-events-none"
+              style={{
+                left: `${currentX * 100}%`,
+                top: `${currentY * 100}%`,
+                transform: 'translate(-50%, -50%)',
+                width: `${currentWidth}%`,
+                textAlign: 'center',
+                transition: isInteracting ? 'none' : 'left 0.2s, top 0.2s, width 0.2s',
+              }}
+            >
+              {/* Selection frame (visible while interacting or hovering) */}
+              <div className="relative group">
+                {/* Border ring shown on hover */}
+                <div
+                  className={`absolute inset-0 -m-1 rounded-md transition-all ${
+                    isInteracting
+                      ? 'ring-2 ring-violet-500 bg-violet-500/5'
+                      : 'ring-1 ring-violet-400/0 group-hover:ring-violet-400/60 group-hover:bg-violet-500/5'
+                  }`}
+                />
+
+                {/* The caption text (this is the drag handle) */}
+                <div
+                  onMouseDown={handleDragStart}
+                  className={`relative pointer-events-auto ${
+                    mode === 'drag' ? 'cursor-grabbing' : 'cursor-grab'
+                  }`}
+                >
+                  <span style={getCaptionStyle()}>{previewText}</span>
+                </div>
+
+                {/* LEFT resize handle */}
+                <div
+                  onMouseDown={handleResizeStart('left')}
+                  className={`absolute top-1/2 -left-2 -translate-y-1/2 w-3 h-8 
+                              bg-violet-500 rounded-sm cursor-ew-resize pointer-events-auto
+                              transition-opacity shadow-lg ${
+                                isInteracting || 'opacity-0 group-hover:opacity-100'
+                              }`}
+                  title="Drag to resize width"
+                >
+                  <div className="w-full h-full flex items-center justify-center text-white text-xs">⋮</div>
+                </div>
+
+                {/* RIGHT resize handle */}
+                <div
+                  onMouseDown={handleResizeStart('right')}
+                  className={`absolute top-1/2 -right-2 -translate-y-1/2 w-3 h-8 
+                              bg-violet-500 rounded-sm cursor-ew-resize pointer-events-auto
+                              transition-opacity shadow-lg ${
+                                isInteracting || 'opacity-0 group-hover:opacity-100'
+                              }`}
+                  title="Drag to resize width"
+                >
+                  <div className="w-full h-full flex items-center justify-center text-white text-xs">⋮</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Floating coordinate hint */}
+            {mode === 'drag' && dragPos && (
+              <div
+                className="absolute bg-violet-500 text-white text-xs px-2 py-1 rounded pointer-events-none font-mono shadow-lg z-10"
+                style={{
+                  left: `${dragPos.x * 100}%`,
+                  top: `${dragPos.y * 100}%`,
+                  transform: 'translate(-50%, calc(-100% - 30px))',
+                }}
+              >
+                {(dragPos.x * 100).toFixed(0)}%, {(dragPos.y * 100).toFixed(0)}%
+              </div>
+            )}
+          </div>
+        </div>
+
+        <p className="text-xs text-gray-500 text-center mt-3">
+          💡 <span className="text-violet-400">Drag the text</span> to move •{' '}
+          <span className="text-violet-400">Drag the handles</span> to resize width
+        </p>
+      </div>
+
+      {/* ─── Width Slider (precise control) ─────────────────── */}
+      <div>
+        <div className="flex justify-between mb-2">
+          <label className="text-sm text-gray-400">Caption Box Width</label>
+          <span className="text-sm text-violet-400 font-mono">{width}%</span>
+        </div>
+        <input
+          type="range"
+          min="30"
+          max="100"
+          value={width}
+          onChange={(e) => onChange({ subtitleWidth: parseInt(e.target.value) })}
+          className="w-full accent-violet-500"
+        />
+        <div className="flex justify-between text-xs text-gray-500 mt-1">
+          <span>Narrow (30%)</span>
+          <span>Full (100%)</span>
+        </div>
+      </div>
+
+      {/* ─── Color Pickers ──────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-sm text-gray-400 mb-2 block">Font Color</label>
+          <div className="flex items-center gap-2 bg-[#0d0d14] border border-[#2a2a3e] rounded-lg p-2">
+            <input
+              type="color"
+              value={fontColor}
+              onChange={(e) => onChange({ subtitleFontColor: e.target.value })}
+              className="w-8 h-8 rounded cursor-pointer bg-transparent border-0"
+            />
+            <span className="text-xs text-gray-300 font-mono">{fontColor.toUpperCase()}</span>
+          </div>
+        </div>
+
+        <div>
+          <label className="text-sm text-gray-400 mb-2 block">
+            {borderStyle === 'box' ? 'Background' : 'Outline Color'}
+          </label>
+          <div className="flex items-center gap-2 bg-[#0d0d14] border border-[#2a2a3e] rounded-lg p-2">
+            <input
+              type="color"
+              value={borderStyle === 'box' ? bgColor.slice(0, 7) : outlineColor}
+              onChange={(e) =>
+                onChange(
+                  borderStyle === 'box'
+                    ? { subtitleBgColor: e.target.value + '80' }  // 50% opacity
+                    : { subtitleOutlineColor: e.target.value }
+                )
+              }
+              className="w-8 h-8 rounded cursor-pointer bg-transparent border-0"
+            />
+            <span className="text-xs text-gray-300 font-mono">
+              {(borderStyle === 'box' ? bgColor.slice(0, 7) : outlineColor).toUpperCase()}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ─── Border Style ───────────────────────────────────── */}
+      <div>
+        <label className="text-sm text-gray-400 mb-2 block">Border Style</label>
+        <div className="grid grid-cols-4 gap-2">
+          {[
+            { value: 'outline', label: 'Outline', icon: '◉' },
+            { value: 'box',     label: 'Box',     icon: '▣' },
+            { value: 'shadow',  label: 'Shadow',  icon: '◐' },
+            { value: 'none',    label: 'None',    icon: '○' },
+          ].map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => onChange({ subtitleBorderStyle: opt.value })}
+              className={`p-3 rounded-lg border text-center transition-all ${
+                borderStyle === opt.value
+                  ? 'border-violet-500 bg-violet-500/10 text-violet-400'
+                  : 'border-[#2a2a3e] text-gray-400 hover:border-gray-600'
+              }`}
+            >
+              <div className="text-xl mb-1">{opt.icon}</div>
+              <div className="text-xs">{opt.label}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ─── Outline Thickness (only if outline mode) ─────── */}
+      {borderStyle === 'outline' && (
+        <div>
+          <div className="flex justify-between mb-2">
+            <label className="text-sm text-gray-400">Outline Thickness</label>
+            <span className="text-sm text-violet-400 font-mono">{outlineWidth}px</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="5"
+            value={outlineWidth}
+            onChange={(e) => onChange({ subtitleOutlineWidth: parseInt(e.target.value) })}
+            className="w-full accent-violet-500"
+          />
+        </div>
+      )}
     </div>
   );
 };

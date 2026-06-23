@@ -23,6 +23,16 @@ public class ExportDTOs {
         private Integer subtitleSize;
         private Integer audioMix;
         private String subtitleLanguage;
+
+        // Subtitle styling
+        private Double subtitleX;
+        private Double subtitleY;
+        private Integer subtitleWidth;
+        private String subtitleFontColor;
+        private String subtitleBgColor;
+        private String subtitleBorderStyle;
+        private String subtitleOutlineColor;
+        private Integer subtitleOutlineWidth;
     }
 
     @Data
@@ -58,7 +68,17 @@ public class ExportDTOs {
         private Integer subtitleSize;
         private Integer audioMix;
         private String subtitleLanguage;
-        }
+
+        //Subtitle styling
+        private Double subtitleX;
+        private Double subtitleY;
+        private Integer subtitleWidth;
+        private String subtitleFontColor;
+        private String subtitleBgColor;
+        private String subtitleBorderStyle;
+        private String subtitleOutlineColor;
+        private Integer subtitleOutlineWidth;
+    }
 
     @Data
     @Builder

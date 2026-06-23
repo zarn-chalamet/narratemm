@@ -13,6 +13,14 @@ export interface ExportSettings {
   subtitleSize?: number;
   audioMix?: number;
   subtitleLanguage?: 'burmese' | 'original'; 
+  subtitleX?: number;
+  subtitleY?: number;
+  subtitleWidth?: number;
+  subtitleFontColor?: string;
+  subtitleBgColor?: string;
+  subtitleBorderStyle?: 'outline' | 'box' | 'shadow' | 'none';
+  subtitleOutlineColor?: string;
+  subtitleOutlineWidth?: number;
 }
 
 export interface ExportResponse {
@@ -37,6 +45,14 @@ export interface ExportResponse {
   subtitleSize?: number;
   audioMix?: number;
   subtitleLanguage?: string;
+  subtitleX?: number;
+  subtitleY?: number;
+  subtitleWidth?: number;
+  subtitleFontColor?: string;
+  subtitleBgColor?: string;
+  subtitleBorderStyle?: string;
+  subtitleOutlineColor?: string;
+  subtitleOutlineWidth?: number;
 }
 
 export interface LogoUploadResponse {

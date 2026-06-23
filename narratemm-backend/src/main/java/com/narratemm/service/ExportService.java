@@ -76,6 +76,14 @@ public class ExportService {
                 .subtitleSize(settings.getSubtitleSize())
                 .audioMix(settings.getAudioMix())
                 .subtitleLanguage(settings.getSubtitleLanguage())
+                .subtitleX(settings.getSubtitleX())
+                .subtitleY(settings.getSubtitleY())
+                .subtitleWidth(settings.getSubtitleWidth())
+                .subtitleFontColor(settings.getSubtitleFontColor())
+                .subtitleBgColor(settings.getSubtitleBgColor())
+                .subtitleBorderStyle(settings.getSubtitleBorderStyle())
+                .subtitleOutlineColor(settings.getSubtitleOutlineColor())
+                .subtitleOutlineWidth(settings.getSubtitleOutlineWidth())
                 .build();
 
         job = exportJobRepository.save(job);
@@ -703,45 +711,84 @@ public class ExportService {
 
         String lastV = "scaled";
 
-                // 2. Subtitles
+        // 2. Subtitles
         if (hasSrt) {
             String srtForFilter = normalizePath(srtPath)
                     .replace("\\", "/")
                     .replaceFirst("^([A-Za-z]):/", "$1\\\\:/");
 
-            String font     = (settings.getSubtitleFont() != null
-                    && !settings.getSubtitleFont().isBlank())
+            String font = (settings.getSubtitleFont() != null && !settings.getSubtitleFont().isBlank())
                     ? settings.getSubtitleFont() : "Pyidaungsu";
-            int    fontSize = settings.getSubtitleSize() != null
-                    ? settings.getSubtitleSize() : 22;
+            int fontSize = settings.getSubtitleSize() != null ? settings.getSubtitleSize() : 22;
 
-            int videoWidth  = Integer.parseInt(w);
+            int videoWidth = Integer.parseInt(w);
             int videoHeight = Integer.parseInt(h);
 
-            // Margin in libass coordinate system 
-            // (we force PlayResY = video height below, so this is pixels)
-            int marginV = Math.max(60, (int) (videoHeight * 0.06));  // 6% from bottom
-            int marginH = (int) (videoWidth * 0.04);                 // 4% side margin
+            //Custom position (defaults: bottom-center at y=0.85)
+            double subY = settings.getSubtitleY() != null ? settings.getSubtitleY() : 0.85;
+            
+            // MarginV = distance from BOTTOM of video to caption baseline
+            int marginV = Math.max(20, (int) ((1.0 - subY) * videoHeight));
+
+            //Custom width: controls horizontal margin (narrower box = bigger margins)
+            int widthPercent = settings.getSubtitleWidth() != null ? settings.getSubtitleWidth() : 92;
+            int marginH = (int) (((100 - widthPercent) / 2.0) * videoWidth / 100.0);
+
+            //Colors (libass uses BGR + inverted alpha)
+            String fontColor    = hexToAss(settings.getSubtitleFontColor(),    "&H00FFFFFF");
+            String bgColor      = hexToAss(settings.getSubtitleBgColor(),      "&H80000000");
+            String outlineColor = hexToAss(settings.getSubtitleOutlineColor(), "&H00000000");
+
+            //Border style mapping (libass)
+            String borderStyleStr = settings.getSubtitleBorderStyle() != null
+                    ? settings.getSubtitleBorderStyle().toLowerCase() : "outline";
+            int borderStyle, outline, shadow;
+            switch (borderStyleStr) {
+                case "box":
+                    borderStyle = 3;    // opaque box
+                    outline = 4;        // box padding
+                    shadow = 0;
+                    break;
+                case "shadow":
+                    borderStyle = 1;
+                    outline = 0;
+                    shadow = 2;
+                    break;
+                case "none":
+                    borderStyle = 1;
+                    outline = 0;
+                    shadow = 0;
+                    break;
+                case "outline":
+                default:
+                    borderStyle = 1;
+                    outline = settings.getSubtitleOutlineWidth() != null
+                            ? settings.getSubtitleOutlineWidth() : 2;
+                    shadow = 1;
+                    break;
+            }
+
+            log.info("Subtitle style | y={} marginV={} width={}% marginH={} border={}",
+                    subY, marginV, widthPercent, marginH, borderStyleStr);
 
             filter.append(";[").append(lastV).append("]")
-                  .append("subtitles=filename='").append(srtForFilter).append("'")
-                  // CRITICAL: Force libass play-resolution to match video
-                  .append(":original_size=").append(videoWidth).append("x").append(videoHeight)
-                  .append(":force_style='")
-                  .append("FontName=").append(font).append(",")
-                  .append("FontSize=").append(fontSize).append(",")
-                  .append("PrimaryColour=&H00FFFFFF,")
-                  .append("OutlineColour=&H00000000,")
-                  .append("BackColour=&H80000000,")
-                  .append("BorderStyle=1,")
-                  .append("Outline=2,")
-                  .append("Shadow=1,")
-                  .append("MarginV=").append(marginV).append(",")
-                  .append("MarginL=").append(marginH).append(",")
-                  .append("MarginR=").append(marginH).append(",")
-                  .append("Alignment=2,")        // 2 = bottom-center
-                  .append("WrapStyle=2")          // 2 = no automatic wrapping (we pre-split)
-                  .append("'[subtitled]");
+                .append("subtitles=filename='").append(srtForFilter).append("'")
+                .append(":original_size=").append(videoWidth).append("x").append(videoHeight)
+                .append(":force_style='")
+                .append("FontName=").append(font).append(",")
+                .append("FontSize=").append(fontSize).append(",")
+                .append("PrimaryColour=").append(fontColor).append(",")
+                .append("OutlineColour=").append(outlineColor).append(",")
+                .append("BackColour=").append(bgColor).append(",")
+                .append("BorderStyle=").append(borderStyle).append(",")
+                .append("Outline=").append(outline).append(",")
+                .append("Shadow=").append(shadow).append(",")
+                .append("MarginV=").append(marginV).append(",")
+                .append("MarginL=").append(marginH).append(",")
+                .append("MarginR=").append(marginH).append(",")
+                .append("Alignment=2,")
+                .append("WrapStyle=0")
+                .append("'[subtitled]");
             lastV = "subtitled";
         }
 
@@ -1063,6 +1110,36 @@ public class ExportService {
         };
     }
 
+    /**
+     * Convert "#RRGGBB" or "#AARRGGBB" → libass "&HAABBGGRR" format.
+     * libass uses BGR order (not RGB) and inverted alpha (0=opaque).
+     */
+    private String hexToAss(String hex, String fallback) {
+        if (hex == null || hex.isBlank()) return fallback;
+        try {
+            hex = hex.replace("#", "").trim();
+            int a, r, g, b;
+            if (hex.length() == 6) {
+                a = 0;  // opaque
+                r = Integer.parseInt(hex.substring(0, 2), 16);
+                g = Integer.parseInt(hex.substring(2, 4), 16);
+                b = Integer.parseInt(hex.substring(4, 6), 16);
+            } else if (hex.length() == 8) {
+                int alphaIn = Integer.parseInt(hex.substring(0, 2), 16);
+                a = 255 - alphaIn;
+                r = Integer.parseInt(hex.substring(2, 4), 16);
+                g = Integer.parseInt(hex.substring(4, 6), 16);
+                b = Integer.parseInt(hex.substring(6, 8), 16);
+            } else {
+                return fallback;
+            }
+            return String.format("&H%02X%02X%02X%02X", a, b, g, r);
+        } catch (Exception e) {
+            log.warn("Invalid hex color '{}', using fallback", hex);
+            return fallback;
+        }
+    }
+
     private ExportResponse toResponse(ExportJob job) {
         return ExportResponse.builder()
                 .id(job.getId())
@@ -1087,6 +1164,14 @@ public class ExportService {
                 .subtitleSize(job.getSubtitleSize())
                 .audioMix(job.getAudioMix())
                 .subtitleLanguage(job.getSubtitleLanguage())
+                .subtitleX(job.getSubtitleX())
+                .subtitleY(job.getSubtitleY())
+                .subtitleWidth(job.getSubtitleWidth())
+                .subtitleFontColor(job.getSubtitleFontColor())
+                .subtitleBgColor(job.getSubtitleBgColor())
+                .subtitleBorderStyle(job.getSubtitleBorderStyle())
+                .subtitleOutlineColor(job.getSubtitleOutlineColor())
+                .subtitleOutlineWidth(job.getSubtitleOutlineWidth())
                 .build();
     }
 }

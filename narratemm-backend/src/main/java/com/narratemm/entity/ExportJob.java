@@ -55,6 +55,31 @@ public class ExportJob {
     @Builder.Default
     private Integer audioMix = 70;
 
+    //Subtitle styling
+    @Column(name = "subtitle_x")
+    private Double subtitleX;          // 0.0–1.0 (center horizontal)
+
+    @Column(name = "subtitle_y")
+    private Double subtitleY;          // 0.0–1.0 (center vertical)
+
+    @Column(name = "subtitle_width")
+    private Integer subtitleWidth;     // 30-100 (% of video width)
+
+    @Column(name = "subtitle_font_color", length = 9)
+    private String subtitleFontColor;  // "#FFFFFF"
+
+    @Column(name = "subtitle_bg_color", length = 9)
+    private String subtitleBgColor;    // "#80000000"
+
+    @Column(name = "subtitle_border_style", length = 20)
+    private String subtitleBorderStyle; // "outline" | "box" | "shadow" | "none"
+
+    @Column(name = "subtitle_outline_color", length = 9)
+    private String subtitleOutlineColor; // "#000000"
+
+    @Column(name = "subtitle_outline_width")
+    private Integer subtitleOutlineWidth;
+
     @CreationTimestamp
     private LocalDateTime startedAt;
 
