@@ -65,6 +65,21 @@ public class ExportController {
                 .cacheControl(CacheControl.noCache())
                 .body(resource);
     }
+
+    @GetMapping("/source/{projectId}")
+    public ResponseEntity<Resource> sourceVideo(@PathVariable String projectId) {
+        Resource resource = exportService.loadSourceVideo(projectId);
+
+        if (resource == null) {
+            return ResponseEntity.noContent().build(); // 204 instead of 404
+        }
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("video/mp4"))
+                .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                .cacheControl(CacheControl.noCache())
+                .body(resource);
+    }
  
     @DeleteMapping("/{jobId}")
     public ResponseEntity<Void> cancel(@PathVariable String jobId) {

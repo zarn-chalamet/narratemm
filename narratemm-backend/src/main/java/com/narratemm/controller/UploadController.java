@@ -4,6 +4,7 @@ import com.narratemm.dto.UploadDTOs.*;
 import com.narratemm.entity.Project;
 import com.narratemm.repository.ProjectRepository;
 import com.narratemm.security.SecurityUtils;
+import com.narratemm.service.ExportService;
 import com.narratemm.service.StorageService;
 import lombok.RequiredArgsConstructor;
 
@@ -28,6 +29,7 @@ public class UploadController {
 
     private final StorageService storageService;
     private final ProjectRepository projectRepository;
+    private final ExportService exportService;
 
     @PostMapping("/file")
     public ResponseEntity<UploadResponse> uploadFile(
@@ -59,6 +61,9 @@ public class UploadController {
 
         project.setYoutubeUrl(request.getYoutubeUrl());
         projectRepository.save(project);
+
+        //store download source video
+        exportService.downloadYoutubeAsync(request.getProjectId(), request.getYoutubeUrl());
 
         return ResponseEntity.ok(UploadResponse.builder()
                 .projectId(request.getProjectId())

@@ -104,6 +104,14 @@ export const exportService = {
     return `${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api/export/preview/${jobId}`;
   },
 
+  getSourceVideoBlob: async (projectId: string): Promise<string> => {
+    const response = await api.get(`/export/source/${projectId}`, {
+      responseType: 'blob',
+    });
+    const blob = new Blob([response.data], { type: 'video/mp4' });
+    return URL.createObjectURL(blob);
+  },
+
   downloadFile: async (jobId: string, filename: string): Promise<void> => {
     const response = await api.get(`/export/download/${jobId}`, {
       responseType: 'blob',

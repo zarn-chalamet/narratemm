@@ -136,6 +136,35 @@ public class ExportService {
         return new FileSystemResource(videoPath.toFile());
     }
 
+    /**
+     * Load the ORIGINAL source video (before export processing).
+     * Used by the editor for live preview.
+     */
+    public Resource loadSourceVideo(String projectId) {
+        log.info("Loading source video for project: {}", projectId);
+        try {
+            //uses authenticated user - works because JWT is sent
+            Project project = projectService.getProjectEntity(projectId);
+            
+            String videoPath = project.getVideoPath();
+            if (videoPath == null || videoPath.isBlank()) {
+                log.warn("No video path for project: {}", projectId);
+                return null;
+            }
+
+            Path path = Paths.get(videoPath);
+            if (!Files.exists(path)) {
+                log.warn("Video file not found at: {}", path);
+                return null;
+            }
+
+            return new FileSystemResource(path);
+        } catch (Exception e) {
+            log.error("Failed to load source video for {}: {}", projectId, e.getMessage());
+            return null;
+        }
+    }
+
     public void cancel(String jobId) {
         ExportJob job = exportJobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Export job not found"));
@@ -854,6 +883,7 @@ public class ExportService {
         Path outputFile = projectDir.resolve("source.mp4");
         if (Files.exists(outputFile) && Files.size(outputFile) > 1024) {
             log.info("YouTube video already downloaded: {}", outputFile);
+            projectService.updateVideoPath(projectId, outputFile.toAbsolutePath().toString());
             return outputFile;
         }
 
@@ -891,6 +921,63 @@ public class ExportService {
                 outputFile, Files.size(outputFile) / 1024 / 1024);
         return outputFile;
     }
+
+    @Async("taskExecutor")
+    public void downloadYoutubeAsync(String projectId, String youtubeUrl) {
+        log.info("Background YouTube download started for project: {}", projectId);
+        try {
+            Path projectDir = storageService.getProjectDir(projectId);
+            Files.createDirectories(projectDir);
+
+            Path outputFile = projectDir.resolve("source.mp4");
+
+            // Skip if already downloaded
+            if (Files.exists(outputFile) && Files.size(outputFile) > 1024) {
+                log.info("YouTube video already exists, skipping download: {}", outputFile);
+                projectService.updateVideoPath(projectId, outputFile.toAbsolutePath().toString());
+                return;
+            }
+
+            List<String> command = List.of(
+                ytDlpPath.replace("/", "\\"),
+                "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b",
+                "--merge-output-format", "mp4",
+                "--no-playlist",
+                "--force-overwrites",
+                "-o", outputFile.toAbsolutePath().toString(),
+                youtubeUrl
+            );
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+
+            try (BufferedReader r = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    log.info("yt-dlp: {}", line);
+                }
+            }
+
+            int exit = process.waitFor();
+
+            if (exit == 0 && Files.exists(outputFile) && Files.size(outputFile) > 1024) {
+                // Save videoPath so preview works immediately
+                projectService.updateVideoPath(
+                    projectId, 
+                    outputFile.toAbsolutePath().toString()
+                );
+                log.info("YouTube video downloaded and videoPath updated for: {}", projectId);
+            } else {
+                log.error("yt-dlp failed for project: {}", projectId);
+            }
+
+        } catch (Exception e) {
+            log.error("YouTube download failed for {}: {}", projectId, e.getMessage(), e);
+        }
+    }
+
 
     // ─────────────────────────────────────────────────────────────────────────
     // SCRIPT / TEXT UTILITIES

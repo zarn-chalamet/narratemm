@@ -178,21 +178,78 @@ export const ProjectPage: React.FC = () => {
 // ─────────────────────────────────────────────────────────────────────────
 // STEP 1: UPLOAD
 // ─────────────────────────────────────────────────────────────────────────
-const Step1Upload: React.FC<{ project: any; onNext: () => void }> = ({ project }) => (
-  <div className="text-center py-8">
-    <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-green-500/20 flex items-center justify-center">
-      <Check className="w-10 h-10 text-green-400" />
+const Step1Upload: React.FC<{ project: any; onNext: () => void }> = ({ project }) => {
+  // File uploads: videoPath already set → immediately ready
+  const [videoReady, setVideoReady] = useState(!!project.videoPath);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+
+    if (project.videoPath || !project.youtubeUrl) return;
+
+    const check = async () => {
+      try {
+        const response = await api.get(`/export/source/${project.id}`, {
+          responseType: 'blob',
+          validateStatus: (s) => s < 500,
+        });
+
+        if (response.status === 200 && response.data?.size > 1024) {
+          setVideoReady(true);
+          if (pollRef.current) clearInterval(pollRef.current);
+        }
+      } catch { /* keep polling */ }
+    };
+
+    check();
+    pollRef.current = setInterval(check, 3000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [project.id, project.videoPath, project.youtubeUrl]);
+
+  return (
+    <div className="text-center py-8">
+      <div className={`w-20 h-20 mx-auto mb-6 rounded-2xl flex items-center justify-center ${
+        videoReady ? 'bg-green-500/20' : 'bg-blue-500/20'
+      }`}>
+        {videoReady
+          ? <Check className="w-10 h-10 text-green-400" />
+          : <Loader2 className="w-10 h-10 text-blue-400 animate-spin" />
+        }
+      </div>
+
+      <h2 className="text-xl font-bold text-white mb-2">
+        {videoReady ? 'Video Ready' : 'Preparing Video...'}
+      </h2>
+
+      <p className="text-gray-400 mb-6">
+        {project.youtubeUrl
+          ? `YouTube: ${project.youtubeUrl}`
+          : 'File uploaded successfully'}
+      </p>
+
+      {/* Show downloading status for YouTube */}
+      {project.youtubeUrl && !videoReady && (
+        <div className="max-w-sm mx-auto mb-6 p-4 bg-[#1a1a24] rounded-xl border border-[#2a2a3e]">
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-5 h-5 text-violet-400 animate-spin flex-shrink-0" />
+            <div className="text-left">
+              <p className="text-sm text-white font-medium">Downloading from YouTube</p>
+              <p className="text-xs text-gray-400 mt-0.5">This may take 1–2 minutes...</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {videoReady && (
+        <div className="inline-flex items-center gap-2 px-4 py-2 bg-[#1a1a24] rounded-lg">
+          <Check className="w-4 h-4 text-green-400" />
+          <span className="text-sm text-gray-400">Format:</span>
+          <span className="text-sm text-white font-medium">{project.aspectRatio}</span>
+        </div>
+      )}
     </div>
-    <h2 className="text-xl font-bold text-white mb-2">Video Ready</h2>
-    <p className="text-gray-400 mb-6">
-      {project.youtubeUrl ? `YouTube: ${project.youtubeUrl}` : `File: ${project.videoPath || 'Uploaded successfully'}`}
-    </p>
-    <div className="inline-flex items-center gap-2 px-4 py-2 bg-[#1a1a24] rounded-lg">
-      <span className="text-sm text-gray-400">Format:</span>
-      <span className="text-sm text-white font-medium">{project.aspectRatio}</span>
-    </div>
-  </div>
-);
+  );
+};
 
 // ─────────────────────────────────────────────────────────────────────────
 // STEP 2: TRANSCRIBE
@@ -780,7 +837,7 @@ const Step5Edit: React.FC<{
             </div>
           </div>
 
-          {/* ✅ Interactive Logo Position Editor */}
+          {/* Interactive Logo Position Editor */}
           {exportSettings.logoPath && logoPreview && (
             <LogoPositionEditor
               logoPreview={logoPreview}
@@ -790,6 +847,7 @@ const Step5Edit: React.FC<{
               logoY={exportSettings.logoY}
               size={exportSettings.logoSize || 100}
               opacity={exportSettings.logoOpacity || 80}
+              projectId={projectId} 
               onChange={updateMultipleSettings}
             />
           )}
@@ -896,6 +954,7 @@ const Step5Edit: React.FC<{
                     aspectRatio={exportSettings.aspectRatio || '9:16'}
                     settings={exportSettings}
                     previewText={previewText}
+                    projectId={projectId}
                     onChange={updateMultipleSettings}
                   />
                 </div>
@@ -1190,6 +1249,7 @@ interface LogoPositionEditorProps {
   logoY?: number;
   size: number;
   opacity: number;
+  projectId: string; 
   onChange: (updates: {
     logoPosition?: string;
     logoX?: number;
@@ -1199,8 +1259,11 @@ interface LogoPositionEditorProps {
   }) => void;
 }
 
+import { SourceVideoPreview } from '../components/SourceVideoPreview';
+
+import { api } from '../services/api.ts';
 const LogoPositionEditor: React.FC<LogoPositionEditorProps> = ({
-  logoPreview, aspectRatio, position, logoX, logoY, size, opacity, onChange,
+  logoPreview, aspectRatio, position, logoX, logoY, size, opacity,projectId, onChange,
 }) => {
   const frameRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -1326,14 +1389,22 @@ const LogoPositionEditor: React.FC<LogoPositionEditorProps> = ({
               height: aspectRatio === '16:9' ? 'auto' : '400px',
               width:  aspectRatio === '16:9' ? '100%' : 'auto',
             }}>
+
+            {/* video background */}
+            <SourceVideoPreview 
+              projectId={projectId} 
+              isYoutube={false} // or pass project prop if available
+            />
+
+            {/* Grid overlay */}
             <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none">
               {Array.from({ length: 9 }).map((_, i) => (
-                <div key={i} className="border border-white/5" />
+                <div key={i} className="border border-white/10" />
               ))}
             </div>
-            <div className="absolute inset-0 flex items-center justify-center text-gray-600 text-xs select-none pointer-events-none">
-              🎬 Video Preview
-            </div>
+
+            {/* Dark overlay for better logo visibility */}
+            <div className="absolute inset-0 bg-black/20 pointer-events-none" />
 
             {snapMode && Object.entries(SNAP_POSITIONS).map(([name, pos]) => (
               <div key={name}
@@ -1676,11 +1747,12 @@ interface SubtitleStyleEditorProps {
   aspectRatio: string;
   settings: any;
   previewText: string;
+  projectId: string;
   onChange: (updates: Record<string, any>) => void;
 }
 
 const SubtitleStyleEditor: React.FC<SubtitleStyleEditorProps> = ({
-  aspectRatio, settings, previewText, onChange,
+  aspectRatio, settings, previewText, projectId, onChange,
 }) => {
   const frameRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<'idle' | 'drag' | 'resize-left' | 'resize-right'>('idle');
@@ -1851,16 +1923,18 @@ const SubtitleStyleEditor: React.FC<SubtitleStyleEditorProps> = ({
               width: aspectRatio === '16:9' ? '100%' : 'auto',
             }}
           >
-            {/* Grid */}
+            {/* Video preview */}
+            <SourceVideoPreview projectId={projectId} />
+
+            {/* Grid overlay */}
             <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none">
               {Array.from({ length: 9 }).map((_, i) => (
-                <div key={i} className="border border-white/5" />
+                <div key={i} className="border border-white/10" />
               ))}
             </div>
 
-            <div className="absolute inset-0 flex items-center justify-center text-gray-600 text-xs pointer-events-none">
-              🎬 Video Preview
-            </div>
+            {/* Slight dark overlay for caption visibility */}
+            <div className="absolute inset-0 bg-black/20 pointer-events-none" />
 
             {/* Caption box with resize handles */}
             <div

@@ -89,7 +89,7 @@ public class StorageService {
     }
 
     public Path getProjectDir(String projectId) {
-        return Paths.get(basePath, "projects", projectId);
+        return Paths.get(basePath, "projects", projectId).toAbsolutePath();
     }
 
     public Path getLogoPath(String projectId) {
