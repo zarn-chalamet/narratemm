@@ -52,6 +52,10 @@ export const exportService = {
     return `${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api/export/download/${jobId}`;
   },
 
+  getPreviewUrl: (jobId: string): string => {
+    return `${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api/export/preview/${jobId}`;
+  },
+
   downloadFile: async (jobId: string, filename: string): Promise<void> => {
     const response = await api.get(`/export/download/${jobId}`, {
       responseType: 'blob',

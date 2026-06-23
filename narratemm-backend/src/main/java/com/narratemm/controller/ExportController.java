@@ -1,9 +1,15 @@
 package com.narratemm.controller;
 
 import com.narratemm.dto.ExportDTOs.*;
+import com.narratemm.entity.ExportJob;
 import com.narratemm.service.ExportService;
 import com.narratemm.service.StorageService;
 import lombok.RequiredArgsConstructor;
+
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
+import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
@@ -39,6 +45,18 @@ public class ExportController {
                 .body(resource);
     }
 
+    @GetMapping("/preview/{jobId}")
+    public ResponseEntity<Resource> previewVideo(@PathVariable String jobId) {
+
+        Resource resource = exportService.loadPreviewVideo(jobId);
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("video/mp4"))
+                .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                .cacheControl(CacheControl.noCache())
+                .body(resource);
+    }
+ 
     @DeleteMapping("/{jobId}")
     public ResponseEntity<Void> cancel(@PathVariable String jobId) {
         exportService.cancel(jobId);

@@ -33,6 +33,7 @@ public class SecurityConfig {
                     "/api/auth/**",
                     "/api/voice/audio/**",
                     "/api/export/download/**",  
+                    "/api/export/preview/**",
                     "/h2-console/**",
                     "/ws/**",
                     "/ws"

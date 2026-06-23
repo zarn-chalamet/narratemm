@@ -102,6 +102,24 @@ public class ExportService {
         return new FileSystemResource(path.toFile());
     }
 
+    public Resource loadPreviewVideo(String jobId) {
+
+        ExportJob job = exportJobRepository.findById(jobId)
+                .orElseThrow(() -> new RuntimeException("Export job not found"));
+
+        if (job.getStatus() != ExportJob.ExportStatus.DONE) {
+            throw new RuntimeException("Export not completed yet");
+        }
+
+        Path videoPath = Paths.get(job.getOutputPath());
+
+        if (!Files.exists(videoPath)) {
+            throw new RuntimeException("Video file not found");
+        }
+
+        return new FileSystemResource(videoPath.toFile());
+    }
+
     public void cancel(String jobId) {
         ExportJob job = exportJobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Export job not found"));

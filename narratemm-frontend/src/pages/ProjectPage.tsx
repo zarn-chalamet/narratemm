@@ -1009,17 +1009,13 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
 
   if (exportJob?.status === 'done') {
     return (
-      <div className="text-center py-8">
-        <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-green-500/20 flex items-center justify-center">
-          <Check className="w-12 h-12 text-green-400" />
-        </div>
-        <h2 className="text-2xl font-bold text-white mb-2">Export Complete! 🎉</h2>
-        <p className="text-gray-400 mb-8">Your Burmese recap video is ready</p>
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-          <Button size="lg" onClick={handleDownload} leftIcon={<Download className="w-5 h-5" />}>Download MP4</Button>
-          <Button variant="outline" size="lg" onClick={() => setExportJob(null)}>Export Again</Button>
-        </div>
-      </div>
+      <ExportDoneView
+        exportJob={exportJob}
+        exportSettings={exportSettings}
+        project={project}
+        onDownload={handleDownload}
+        onReExport={() => setExportJob(null)}
+      />
     );
   }
 
@@ -1353,6 +1349,256 @@ const LogoPositionEditor: React.FC<LogoPositionEditorProps> = ({
                   : 'border-[#2a2a3e] text-gray-500 hover:border-gray-600'
               }`}>•</button>
           ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// EXPORT DONE VIEW - Side-by-side layout
+// ─────────────────────────────────────────────────────────────────────────
+interface ExportDoneViewProps {
+  exportJob: any;
+  exportSettings: any;
+  project: any;
+  onDownload: () => void;
+  onReExport: () => void;
+}
+
+const ExportDoneView: React.FC<ExportDoneViewProps> = ({
+  exportJob, exportSettings, project, onDownload, onReExport,
+}) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoLoaded, setVideoLoaded] = useState(false);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [videoDuration, setVideoDuration] = useState<number>(0);
+
+  const aspectRatio = exportSettings?.aspectRatio || project?.aspectRatio || '9:16';
+  const cssAspectRatio = aspectRatio.replace(':', ' / ');
+  const previewUrl = exportService.getPreviewUrl(exportJob.id);
+
+  const formatDuration = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      {/* ─── Success Header ─────────────────────────────────────── */}
+      <div className="text-center">
+        <div className="inline-flex items-center justify-center w-14 h-14 mb-3 rounded-2xl 
+                        bg-gradient-to-br from-green-500/20 to-emerald-500/20 
+                        border border-green-500/30 shadow-lg shadow-green-500/10">
+          <Check className="w-7 h-7 text-green-400" />
+        </div>
+        <h2 className="text-2xl font-bold bg-gradient-to-r from-white to-gray-300 
+                       bg-clip-text text-transparent mb-1">
+          Export Complete! 🎉
+        </h2>
+        <p className="text-sm text-gray-400">
+          Watch the preview, then save your video
+        </p>
+      </div>
+
+      {/* ─── Two Column Layout ─────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+        
+        {/* ═══════════ LEFT: Video Preview (3 cols) ═══════════ */}
+        <div className="lg:col-span-3">
+          <div className="bg-gradient-to-br from-[#0d0d14] to-[#13131a] 
+                          border border-[#2a2a3e] rounded-2xl p-4 
+                          shadow-2xl shadow-violet-500/5 h-full">
+            <div className="flex items-center justify-center h-full">
+              <div
+                className="relative bg-black rounded-xl overflow-hidden shadow-2xl 
+                           ring-1 ring-violet-500/20 w-full"
+                style={{
+                  aspectRatio: cssAspectRatio,
+                  maxHeight: '550px',
+                  maxWidth: aspectRatio === '9:16' || aspectRatio === '4:5' ? '350px' : '100%',
+                  margin: '0 auto',
+                }}
+              >
+                {/* Loading state */}
+                {!videoLoaded && !videoError && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center 
+                                  bg-gradient-to-br from-gray-900 to-black z-10">
+                    <div className="relative">
+                      <div className="absolute inset-0 bg-violet-500/30 blur-xl rounded-full" />
+                      <Loader2 className="relative w-10 h-10 text-violet-400 animate-spin" />
+                    </div>
+                    <p className="text-sm text-gray-400 mt-3 font-medium">Loading...</p>
+                  </div>
+                )}
+
+                {/* Error state */}
+                {videoError && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center 
+                                  bg-gradient-to-br from-red-900/30 to-black z-10 p-6">
+                    <div className="w-12 h-12 rounded-full bg-red-500/20 border border-red-500/30 
+                                    flex items-center justify-center mb-3">
+                      <RefreshCw className="w-6 h-6 text-red-400" />
+                    </div>
+                    <p className="text-sm text-red-400 text-center font-medium">{videoError}</p>
+                    <p className="text-xs text-gray-500 text-center mt-1">
+                      You can still save the file
+                    </p>
+                  </div>
+                )}
+
+                {/* Video player */}
+                <video
+                  ref={videoRef}
+                  src={previewUrl}
+                  controls
+                  playsInline
+                  className="w-full h-full bg-black"
+                  onLoadedData={() => setVideoLoaded(true)}
+                  onLoadedMetadata={(e) => setVideoDuration(e.currentTarget.duration)}
+                  onError={() => {
+                    setVideoError('Failed to load preview');
+                    setVideoLoaded(true);
+                  }}
+                >
+                  Your browser does not support video playback.
+                </video>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ═══════════ RIGHT: Info + Actions (2 cols) ═══════════ */}
+        <div className="lg:col-span-2 space-y-4">
+          
+          {/* Video Info Card */}
+          <div className="bg-gradient-to-br from-[#0d0d14] to-[#13131a] 
+                          border border-[#2a2a3e] rounded-2xl p-5">
+            <h3 className="text-sm font-bold text-white mb-4 flex items-center gap-2">
+              <span className="w-1 h-4 bg-violet-500 rounded-full" />
+              Video Details
+            </h3>
+
+            <div className="space-y-3">
+              {/* Format */}
+              <div className="flex items-center justify-between py-2 border-b border-[#2a2a3e]/50">
+                <span className="text-xs text-gray-500">Format</span>
+                <span className="text-sm font-mono font-medium text-violet-300">
+                  {aspectRatio}
+                </span>
+              </div>
+
+              {/* Duration */}
+              {videoDuration > 0 && (
+                <div className="flex items-center justify-between py-2 border-b border-[#2a2a3e]/50">
+                  <span className="text-xs text-gray-500">Duration</span>
+                  <span className="text-sm font-mono font-medium text-blue-300">
+                    {formatDuration(videoDuration)}
+                  </span>
+                </div>
+              )}
+
+              {/* Subtitles */}
+              <div className="flex items-center justify-between py-2 border-b border-[#2a2a3e]/50">
+                <span className="text-xs text-gray-500">Subtitles</span>
+                <span className={`text-sm font-medium ${
+                  exportSettings?.subtitleEnabled ? 'text-green-400' : 'text-gray-500'
+                }`}>
+                  {exportSettings?.subtitleEnabled ? '✓ On' : '✗ Off'}
+                </span>
+              </div>
+
+              {/* Watermark */}
+              <div className="flex items-center justify-between py-2 border-b border-[#2a2a3e]/50">
+                <span className="text-xs text-gray-500">Watermark</span>
+                <span className={`text-sm font-medium ${
+                  exportSettings?.logoPath ? 'text-pink-400' : 'text-gray-500'
+                }`}>
+                  {exportSettings?.logoPath ? '✓ Added' : '✗ None'}
+                </span>
+              </div>
+
+              {/* Voice Mix */}
+              <div className="flex items-center justify-between py-2">
+                <span className="text-xs text-gray-500">Voice Mix</span>
+                <span className="text-sm font-medium text-orange-300">
+                  {exportSettings?.audioMix || 70}%
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="space-y-3">
+            {/* ✅ Save Video (Download) */}
+            <button
+              onClick={onDownload}
+              className="group w-full relative overflow-hidden p-4 rounded-2xl
+                         bg-gradient-to-br from-green-500/10 via-emerald-500/10 to-green-500/5
+                         border border-green-500/30 hover:border-green-400/60
+                         transition-all duration-300 hover:scale-[1.02] hover:shadow-xl 
+                         hover:shadow-green-500/20"
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-green-500/0 to-emerald-500/10 
+                              opacity-0 group-hover:opacity-100 transition-opacity" />
+              
+              <div className="relative flex items-center gap-3">
+                <div className="flex-shrink-0 w-12 h-12 rounded-xl 
+                                bg-gradient-to-br from-green-500/20 to-emerald-500/20
+                                border border-green-500/30 flex items-center justify-center
+                                group-hover:scale-110 transition-transform">
+                  <Download className="w-5 h-5 text-green-400" />
+                </div>
+                <div className="text-left flex-1 min-w-0">
+                  <p className="font-bold text-green-400 group-hover:text-green-300 transition-colors">
+                    Save Video
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Download to your device
+                  </p>
+                </div>
+              </div>
+            </button>
+
+            {/* 🔄 Try Again (Re-export) */}
+            <button
+              onClick={onReExport}
+              className="group w-full relative overflow-hidden p-4 rounded-2xl
+                         bg-gradient-to-br from-orange-500/10 via-amber-500/10 to-orange-500/5
+                         border border-orange-500/30 hover:border-orange-400/60
+                         transition-all duration-300 hover:scale-[1.02] hover:shadow-xl 
+                         hover:shadow-orange-500/20"
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-orange-500/0 to-amber-500/10 
+                              opacity-0 group-hover:opacity-100 transition-opacity" />
+              
+              <div className="relative flex items-center gap-3">
+                <div className="flex-shrink-0 w-12 h-12 rounded-xl 
+                                bg-gradient-to-br from-orange-500/20 to-amber-500/20
+                                border border-orange-500/30 flex items-center justify-center
+                                group-hover:scale-110 transition-transform">
+                  <RefreshCw className="w-5 h-5 text-orange-400" />
+                </div>
+                <div className="text-left flex-1 min-w-0">
+                  <p className="font-bold text-orange-400 group-hover:text-orange-300 transition-colors">
+                    Try Again
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Change settings and re-make
+                  </p>
+                </div>
+              </div>
+            </button>
+          </div>
+
+          {/* Helper Note */}
+          <div className="bg-[#1a1a24]/50 border border-[#2a2a3e]/50 rounded-xl p-3">
+            <p className="text-xs text-gray-500 text-center leading-relaxed">
+              💡 Your video is saved on the server.<br />
+              You can preview it anytime.
+            </p>
+          </div>
         </div>
       </div>
     </div>
