@@ -52,6 +52,22 @@ export const exportService = {
     return `${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api/export/download/${jobId}`;
   },
 
+  downloadFile: async (jobId: string, filename: string): Promise<void> => {
+    const response = await api.get(`/export/download/${jobId}`, {
+      responseType: 'blob',
+    });
+    
+    const blob = new Blob([response.data], { type: 'video/mp4' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  },
+
   uploadLogo: async (
     projectId: string, 
     file: File

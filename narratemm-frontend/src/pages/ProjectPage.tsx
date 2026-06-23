@@ -995,13 +995,16 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
     } finally { setIsStarting(false); }
   };
 
+
   const handleDownload = () => {
     if (!exportJob?.id) return;
     const url = exportService.getDownloadUrl(exportJob.id);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${project.title || 'export'}.mp4`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
   };
 
   if (exportJob?.status === 'done') {

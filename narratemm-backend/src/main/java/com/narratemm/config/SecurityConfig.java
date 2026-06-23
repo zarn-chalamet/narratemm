@@ -32,6 +32,7 @@ public class SecurityConfig {
                 .requestMatchers(
                     "/api/auth/**",
                     "/api/voice/audio/**",
+                    "/api/export/download/**",  
                     "/h2-console/**",
                     "/ws/**",
                     "/ws"
