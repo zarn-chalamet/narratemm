@@ -8,9 +8,17 @@ import com.narratemm.security.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import org.springframework.core.io.Resource;
+import org.springframework.beans.factory.annotation.Value;
+import java.io.*;
+import java.nio.file.*;
 import java.util.List;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.stream.Collectors;
 
 @Service
@@ -24,6 +32,9 @@ public class ProjectService {
     private final VoiceOverRepository voiceOverRepository;
     private final ExportJobRepository exportJobRepository;
     private final StorageService storageService;
+
+    @Value("${app.tools.ffmpeg-path:ffmpeg}")
+    private String ffmpegPath;
 
     public ProjectResponse create(CreateRequest request) {
         User user = SecurityUtils.getCurrentUser();
@@ -101,6 +112,17 @@ public class ProjectService {
             p.setVideoPath(videoPath);
             projectRepository.save(p);
             log.info("Updated videoPath for project {}: {}", projectId, videoPath);
+
+            // Generate thumbnail immediately when video is ready
+            try {
+                Path video = Paths.get(videoPath);
+                Path thumb = storageService.getProjectDir(projectId).resolve("thumbnail.jpg");
+                if (Files.exists(video) && !Files.exists(thumb)) {
+                    generateThumbnail(video, thumb);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to pre-generate thumbnail for {}: {}", projectId, e.getMessage());
+            }
         });
     }
 
@@ -110,6 +132,73 @@ public class ProjectService {
             projectRepository.save(p);
             log.info("Updated durationSeconds for project {}: {}s", projectId, durationSeconds);
         });
+    }
+
+    
+    /**
+     * Get thumbnail for project - generate from source video if not exists.
+     */
+    public Resource getThumbnail(String projectId) {
+        String userId = SecurityUtils.getCurrentUserId();
+        Project project = projectRepository.findByIdAndUserId(projectId, userId)
+                .orElse(null);
+        if (project == null) return null;
+
+        Path thumbnailPath = storageService.getProjectDir(projectId).resolve("thumbnail.jpg");
+
+        // Return cached thumbnail if exists
+        if (Files.exists(thumbnailPath)) {
+            return new FileSystemResource(thumbnailPath);
+        }
+
+        // Try to generate from source video
+        if (project.getVideoPath() == null || project.getVideoPath().isBlank()) {
+            return null;
+        }
+
+        Path videoPath = Paths.get(project.getVideoPath());
+        if (!Files.exists(videoPath)) {
+            return null;
+        }
+
+        try {
+            generateThumbnail(videoPath, thumbnailPath);
+            if (Files.exists(thumbnailPath)) {
+                return new FileSystemResource(thumbnailPath);
+            }
+        } catch (Exception e) {
+            log.error("Failed to generate thumbnail for {}: {}", projectId, e.getMessage());
+        }
+        return null;
+    }
+
+    private void generateThumbnail(Path videoPath, Path outputPath) throws Exception {
+        Files.createDirectories(outputPath.getParent());
+
+        List<String> command = List.of(
+                ffmpegPath.replace("/", "\\"),
+                "-y",
+                "-ss", "00:00:01",
+                "-i", videoPath.toAbsolutePath().toString(),
+                "-vframes", "1",
+                "-vf", "scale=480:-1",
+                "-q:v", "3",
+                outputPath.toAbsolutePath().toString()
+        );
+
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.redirectErrorStream(true);
+        Process p = pb.start();
+
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+            while (r.readLine() != null) {  }
+        }
+        int exit = p.waitFor();
+        if (exit == 0 && Files.exists(outputPath)) {
+            log.info("Generated thumbnail: {}", outputPath);
+        } else {
+            log.warn("Thumbnail generation failed (exit={}) for: {}", exit, videoPath);
+        }
     }
 
     private ProjectResponse toResponse(Project p) {

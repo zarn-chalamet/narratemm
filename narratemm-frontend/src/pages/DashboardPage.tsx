@@ -5,6 +5,7 @@ import { useAuthStore } from '../store/authStore';
 import { useProjectStore } from '../store/projectStore';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
+import { ProjectCard } from '../components/ProjectCard';
 
 const statusConfig: Record<string, { label: string; color: string; bg: string }> = {
   draft: { label: 'Draft', color: 'text-gray-400', bg: 'bg-gray-500/10' },
@@ -96,30 +97,10 @@ export const DashboardPage: React.FC = () => {
             </Link>
           </Card>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-4 sm:gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {projects.slice(0, 6).map((project) => {
               const status = statusConfig[project.status] || statusConfig.draft;
-              return (
-                <Link to={`/project/${project.id}`} key={project.id}>
-                  <Card className="group" hover>
-                    <div className="relative aspect-video bg-[#1a1a24] rounded-t-2xl overflow-hidden">
-                      <div className="w-full h-full flex items-center justify-center">
-                        <Film className="w-12 h-12 text-gray-700" />
-                      </div>
-                      <div className={`absolute top-2 right-2 px-2 py-1 ${status.bg} backdrop-blur-sm rounded-lg`}>
-                        <span className={`text-xs font-medium ${status.color}`}>{status.label}</span>
-                      </div>
-                      <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-sm rounded text-xs text-white">
-                        {project.aspectRatio}
-                      </div>
-                    </div>
-                    <div className="p-4">
-                      <h3 className="font-medium text-white truncate text-sm sm:text-base">{project.title}</h3>
-                      <p className="text-xs sm:text-sm text-gray-500 mt-1">{formatDate(project.createdAt)}</p>
-                    </div>
-                  </Card>
-                </Link>
-              );
+              return <ProjectCard key={project.id} project={project} status={status} />;
             })}
           </div>
         )}

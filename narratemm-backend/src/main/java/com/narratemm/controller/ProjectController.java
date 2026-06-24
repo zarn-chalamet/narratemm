@@ -4,9 +4,15 @@ import com.narratemm.dto.ProjectDTOs.*;
 import com.narratemm.service.ProjectService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+
+import org.springframework.core.io.Resource;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.time.Duration;
 import java.util.List;
 
 @RestController
@@ -40,5 +46,17 @@ public class ProjectController {
     public ResponseEntity<Void> delete(@PathVariable String id) {
         projectService.delete(id);
         return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/{id}/thumbnail")
+    public ResponseEntity<Resource> getThumbnail(@PathVariable String id) {
+        Resource thumbnail = projectService.getThumbnail(id);
+        if (thumbnail == null) {
+            return ResponseEntity.noContent().build();
+        }
+        return ResponseEntity.ok()
+                .contentType(MediaType.IMAGE_JPEG)
+                .cacheControl(CacheControl.maxAge(Duration.ofHours(1)))
+                .body(thumbnail);
     }
 }
