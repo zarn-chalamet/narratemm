@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
@@ -29,6 +30,9 @@ public class TranscriptService {
     @Value("${app.tools.ffprobe-path:ffprobe}")
     private String ffprobePath;
 
+    @Value("${app.tools.ffmpeg-path:ffmpeg}")
+    private String ffmpegPath;
+
     public TranscribeResponse transcribe(String projectId) {
         Project project = projectService.getProjectEntity(projectId);
         projectService.updateStatus(projectId, Project.ProjectStatus.TRANSCRIBING);
@@ -41,7 +45,7 @@ public class TranscriptService {
 
         try {
             if (project.getYoutubeUrl() != null && !project.getYoutubeUrl().isEmpty()) {
-                // Use Supadata for YouTube
+                // ── YouTube path: use Supadata ────────────────────────
                 SupadataService.CaptionResult captions =
                         supadataService.fetchCaptions(project.getYoutubeUrl());
                 rawText          = captions.rawText;
@@ -49,33 +53,45 @@ public class TranscriptService {
                 detectedLanguage = captions.language;
                 source           = Transcript.TranscriptSource.SUPADATA;
 
-                // ── Get video duration from SRT last timestamp ────────────
                 durationSeconds = extractDurationFromSrt(srtContent);
                 log.info("YouTube video duration from SRT: {}s", durationSeconds);
 
             } else if (project.getVideoPath() != null) {
-                // Use Groq Whisper for uploaded files
+                // ── Uploaded file path: extract audio → Groq ──────────
                 Path videoPath = Paths.get(project.getVideoPath());
-                rawText    = groqService.transcribeText(videoPath);
-                srtContent = groqService.transcribeSrt(videoPath);
+
+                // Step 1: Extract small MP3 from video
+                Path audioPath = extractAudioFromVideo(videoPath, projectId);
+
+                // Step 2: Send small MP3 to Groq (not the big MP4)
+                String verboseJson = groqService.transcribeVerboseJson(audioPath);
+                rawText    = groqService.extractText(verboseJson);
+                srtContent = groqService.convertToSrt(verboseJson);
                 source     = Transcript.TranscriptSource.GROQ;
 
-                // ── Get real video duration via ffprobe ───────────────────
+                // Step 3: Get duration from original video
                 durationSeconds = getVideoDurationSeconds(videoPath);
                 log.info("Uploaded video duration: {}s", durationSeconds);
 
+                // Step 4: Clean up extracted audio (no longer needed)
+                try {
+                    Files.deleteIfExists(audioPath);
+                    log.info("Cleaned up temp audio: {}", audioPath);
+                } catch (Exception e) {
+                    log.warn("Could not delete temp audio: {}", e.getMessage());
+                }
+
             } else {
-                throw new RuntimeException(
-                        "No video source available for transcription");
+                throw new RuntimeException("No video source available for transcription");
             }
 
-            // ── Update project duration ───────────────────────────────────
+            // ── Update project duration ───────────────────────────────
             if (durationSeconds > 0) {
                 projectService.updateDurationSeconds(projectId, durationSeconds);
                 log.info("Updated project durationSeconds={}", durationSeconds);
             }
 
-            // Delete old transcript if exists
+            // ── Delete old transcript if exists ───────────────────────
             transcriptRepository.findByProjectId(projectId)
                     .ifPresent(transcriptRepository::delete);
 
@@ -124,13 +140,52 @@ public class TranscriptService {
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
+     * Extract audio track from video using FFmpeg.
+     * Produces a small mono 16kHz MP3 that's perfect for Whisper.
+     */
+    private Path extractAudioFromVideo(Path videoPath, String projectId) throws Exception {
+        Path projectDir = storageService.getProjectDir(projectId);
+        Path audioPath = projectDir.resolve("audio_for_transcribe.mp3");
+
+        log.info("Extracting audio: {} → {}", videoPath.getFileName(), audioPath.getFileName());
+
+        List<String> command = List.of(
+                ffmpegPath.replace("/", "\\"),
+                "-y",                          // overwrite if exists
+                "-i", videoPath.toAbsolutePath().toString(),
+                "-vn",                         // no video
+                "-acodec", "libmp3lame",       // MP3 codec
+                "-ar", "16000",                // 16kHz (Whisper standard)
+                "-ac", "1",                    // mono
+                "-b:a", "64k",                 // low bitrate = small file
+                audioPath.toAbsolutePath().toString()
+        );
+
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.redirectErrorStream(true);
+        Process p = pb.start();
+
+        // Consume output to prevent hang
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+            while (r.readLine() != null) { /* discard */ }
+        }
+
+        int exit = p.waitFor();
+        if (exit != 0 || !Files.exists(audioPath)) {
+            throw new RuntimeException("Audio extraction failed (exit code: " + exit + ")");
+        }
+
+        long sizeKB = Files.size(audioPath) / 1024;
+        log.info("Audio extracted successfully: {} KB", sizeKB);
+        return audioPath;
+    }
+
+    /**
      * Parse the last timestamp from SRT content to get total duration.
-     * SRT format: 00:00:05,000 --> 00:00:08,500
      */
     private int extractDurationFromSrt(String srtContent) {
         if (srtContent == null || srtContent.isBlank()) return 0;
 
-        // Find all end timestamps (after " --> ")
         java.util.regex.Pattern p = java.util.regex.Pattern.compile(
                 "--> (\\d{2}):(\\d{2}):(\\d{2}),(\\d{3})");
         java.util.regex.Matcher m = p.matcher(srtContent);
@@ -143,7 +198,6 @@ public class TranscriptService {
             int total = h * 3600 + mi * 60 + s;
             if (total > lastSeconds) lastSeconds = total;
         }
-
         return lastSeconds;
     }
 
