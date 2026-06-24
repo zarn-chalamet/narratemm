@@ -58,9 +58,25 @@ public class ExportService {
         projectService.updateStatus(projectId, Project.ProjectStatus.EXPORTING);
 
         ExportSettings settings = request.getSettings();
-        if (settings.getAspectRatio() == null || settings.getAspectRatio().isBlank()) {
-            settings.setAspectRatio(project.getAspectRatio());
+
+        // ALWAYS use project's aspectRatio as source of truth
+        // Frontend may send stale defaults — project entity has the real value
+        String projectRatio = project.getAspectRatio();
+        String requestedRatio = settings.getAspectRatio();
+
+        if (projectRatio != null && !projectRatio.isBlank()) {
+            if (!projectRatio.equals(requestedRatio)) {
+                log.warn("Frontend sent aspectRatio='{}' but project has '{}' — using project's value",
+                        requestedRatio, projectRatio);
+            }
+            settings.setAspectRatio(projectRatio);
+        } else if (requestedRatio == null || requestedRatio.isBlank()) {
+            // Final fallback if both are empty
+            settings.setAspectRatio("9:16");
+            log.warn("No aspectRatio anywhere — defaulting to 9:16");
         }
+
+        log.info("Export aspectRatio resolved to: {}", settings.getAspectRatio());
 
         ExportJob job = ExportJob.builder()
                 .project(project)

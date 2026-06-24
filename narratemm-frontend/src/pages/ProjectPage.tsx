@@ -26,22 +26,28 @@ export const ProjectPage: React.FC = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { projects } = useProjectStore();
+
+  // Look up project BEFORE useState so we can use it in initial state
+  const project = projects.find((p: any) => p.id === id);
+
   const [currentStep, setCurrentStepState] = useState(1);
   const [transcript, setTranscript] = useState<any>(null);
   const [script, setScript] = useState<any>(null);
   const [editedContent, setEditedContent] = useState('');
   const [voiceOver, setVoiceOver] = useState<any>(null);
-  const [exportSettings, setExportSettings] = useState<any>({ 
-    aspectRatio: '9:16', 
-    logoPosition: 'bottom-right', 
+
+  //initializer — reads project.aspectRatio on first render
+  const [exportSettings, setExportSettings] = useState<any>(() => ({
+    aspectRatio: project?.aspectRatio || '9:16',
+    logoPosition: 'bottom-right',
     logoX: 0.95,
     logoY: 0.95,
-    logoSize: 100, 
-    logoOpacity: 80, 
-    subtitleEnabled: true, 
-    subtitleFont: 'Noto Serif Myanmar', 
-    subtitleSize: 56, 
-    audioMix: 70, 
+    logoSize: 100,
+    logoOpacity: 80,
+    subtitleEnabled: true,
+    subtitleFont: 'Noto Serif Myanmar',
+    subtitleSize: 56,
+    audioMix: 70,
     subtitleLanguage: 'burmese',
     subtitleX: 0.5,
     subtitleY: 0.85,
@@ -51,22 +57,22 @@ export const ProjectPage: React.FC = () => {
     subtitleBorderStyle: 'outline',
     subtitleOutlineColor: '#000000',
     subtitleOutlineWidth: 2,
-  });
+  }));
+
   const [exportJob, setExportJob] = useState<any>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  
-  const setCurrentStep = (s: number) => setCurrentStepState(s);
-  const nextStep = () => setCurrentStepState((s) => Math.min(s + 1, 6));
-  const prevStep = () => setCurrentStepState((s) => Math.max(s - 1, 1));
-  const updateExportProgress = (p: number) => setExportJob((job: any) => job ? { ...job, progress: p } : job);
-  
-  const project = projects.find((p: any) => p.id === id);
 
   useEffect(() => {
     if (!project) navigate('/dashboard');
   }, [project, navigate]);
 
   if (!project) return null;
+
+  const setCurrentStep = (s: number) => setCurrentStepState(s);
+  const nextStep = () => setCurrentStepState((s) => Math.min(s + 1, 6));
+  const prevStep = () => setCurrentStepState((s) => Math.max(s - 1, 1));
+  const updateExportProgress = (p: number) => setExportJob((job: any) => job ? { ...job, progress: p } : job);
+  
 
   const renderStepContent = () => {
     switch (currentStep) {

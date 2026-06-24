@@ -5,7 +5,7 @@ const API_BASE_URL = 'http://localhost:8080/api';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 300000,
+  timeout: 3000000,
 });
 
 // Request interceptor - Add JWT token to every request
