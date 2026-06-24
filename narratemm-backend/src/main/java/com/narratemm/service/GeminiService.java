@@ -34,6 +34,9 @@ public class GeminiService {
     /**
      * Generate script using Gemini API
      */
+    /**
+     * Generate script using Gemini API
+     */
     public String generateScript(String transcript, String style, String language) {
         String prompt = buildScriptPrompt(transcript, style, language);
 
@@ -68,6 +71,7 @@ public class GeminiService {
         }
     }
 
+
     /**
      * Generate TTS audio using Gemini
      */
@@ -100,7 +104,7 @@ public class GeminiService {
                     .retryWhen(Retry.backoff(2, Duration.ofSeconds(10)))   // retry twice
                     .block(Duration.ofSeconds(300));   // ← 5 minutes (300 seconds)
 
-            log.info("✅ TTS generation completed successfully");
+            log.info("TTS generation completed successfully");
             return parseAudioResponse(response);
 
         } catch (WebClientResponseException e) {
@@ -147,7 +151,10 @@ public class GeminiService {
             - Use emojis sparingly for emphasis (🎬 💔 ⚡ 😱)
             - Add dramatic pauses with "..."
             - End with a hook to make viewers want more
-            - Structure: Hook → Setup → Key Events → Cliffhanger
+            - Structure the content as: Hook → Setup → Key Events → Cliffhanger
+            - Do NOT include section labels or headers like [Hook], [Setup], [Key Events], [Cliffhanger]
+            - Do NOT use markdown formatting like **bold** or ## headers
+            - Write as pure flowing narration text only
             
             Original Transcript:
             %s
@@ -156,7 +163,7 @@ public class GeminiService {
             """, styleInstruction, langInstruction, transcript);
     }
 
-        private String parseGeminiTextResponse(String response) {
+    private String parseGeminiTextResponse(String response) {
         try {
             JsonNode root = objectMapper.readTree(response);
             
@@ -185,7 +192,7 @@ public class GeminiService {
                 throw new RuntimeException("AI response has no text parts");
             }
             
-            // ✅ Properly extracts only the "text" field, ignoring "thoughtSignature"
+            // Properly extracts only the "text" field, ignoring "thoughtSignature"
             String text = parts.get(0).path("text").asText();
             if (text.isEmpty()) {
                 throw new RuntimeException("AI returned empty text");

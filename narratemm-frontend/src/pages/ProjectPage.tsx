@@ -98,6 +98,7 @@ export const ProjectPage: React.FC = () => {
           project={project} 
           voiceOver={voiceOver} 
           setVoiceOver={setVoiceOver}
+          editedContent={editedContent}
           isProcessing={isProcessing} 
           setIsProcessing={setIsProcessing} 
           onNext={nextStep}
@@ -527,7 +528,7 @@ const Step3Script: React.FC<any> = ({ project, script, setScript,editedContent, 
 // ─────────────────────────────────────────────────────────────────────────
 // STEP 4: VOICE-OVER
 // ─────────────────────────────────────────────────────────────────────────
-const Step4VoiceOver: React.FC<any> = ({ project, voiceOver, setVoiceOver, isProcessing, setIsProcessing }) => {
+const Step4VoiceOver: React.FC<any> = ({ project, voiceOver, setVoiceOver,editedContent, isProcessing, setIsProcessing }) => {
   const [selectedVoice, setSelectedVoice] = useState<'Aoede' | 'Puck' | 'Charon' | 'Kore'>('Aoede');
   const [stylePrompt, setStylePrompt] = useState('Speak in a warm, engaging tone suitable for drama storytelling');
   const [speed, setSpeed] = useState(1.0);
@@ -565,6 +566,7 @@ const Step4VoiceOver: React.FC<any> = ({ project, voiceOver, setVoiceOver, isPro
         voiceName: selectedVoice,
         stylePrompt: stylePrompt.trim(),
         speed: parseFloat(speed.toFixed(1)),
+        scriptContent: editedContent,
       });
       clearInterval(progressInterval);
       setProgress(100);
@@ -576,7 +578,9 @@ const Step4VoiceOver: React.FC<any> = ({ project, voiceOver, setVoiceOver, isPro
     } finally { setIsProcessing(false); }
   };
 
-  const audioUrl = voiceService.getAudioUrl(project?.id || '');
+  const audioUrl = voiceOver?.id
+    ? voiceService.getAudioUrl(project?.id || '', voiceOver.id)
+    : voiceService.getAudioUrl(project?.id || '');
 
   if (voiceOver?.audioPath) {
     return (
@@ -592,7 +596,7 @@ const Step4VoiceOver: React.FC<any> = ({ project, voiceOver, setVoiceOver, isPro
             leftIcon={<RefreshCw className="w-4 h-4" />}>Regenerate</Button>
         </div>
         <div className="bg-[#1a1a24] rounded-2xl p-6">
-          <audio ref={audioRef} src={audioUrl} controls className="w-full" />
+          <audio key={audioUrl} ref={audioRef} src={audioUrl} controls className="w-full" />
         </div>
         {voiceOver.stylePrompt && (
           <div className="bg-[#1a1a24] rounded-xl p-4">

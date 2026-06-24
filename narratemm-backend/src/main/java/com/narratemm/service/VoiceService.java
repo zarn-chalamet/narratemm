@@ -43,6 +43,22 @@ public class VoiceService {
                 .orElseThrow(() -> new RuntimeException(
                         "Script not found. Please generate script first."));
 
+        // Use scriptContent from request if provided (user may not have saved yet)
+        // Fall back to DB content if not provided
+        String textToSpeak = (request.getScriptContent() != null 
+                && !request.getScriptContent().isBlank())
+                ? request.getScriptContent()
+                : script.getContent();
+
+        // Also save the latest content to DB before generating
+        if (request.getScriptContent() != null 
+                && !request.getScriptContent().isBlank()
+                && !request.getScriptContent().equals(script.getContent())) {
+            script.setContent(request.getScriptContent());
+            scriptRepository.save(script);
+            log.info("Saved latest script content before TTS for project {}", projectId);
+        }
+
         try {
             String language = request.getLanguage() != null
                     ? request.getLanguage() : "myanmar";
@@ -53,7 +69,7 @@ public class VoiceService {
                     projectId, language, speed);
 
             byte[] audioData = edgeTTSService.generateTTS(
-                    script.getContent(),
+                    textToSpeak,
                     request.getVoiceName(),
                     speed,
                     language

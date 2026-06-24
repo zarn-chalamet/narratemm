@@ -14,6 +14,7 @@ public class VoiceDTOs {
         private String language;
         private String stylePrompt;
         private Double speed; // 0.5 - 2.0
+        private String scriptContent;
     }
 
     @Data

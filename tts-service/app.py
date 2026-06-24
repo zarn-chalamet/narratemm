@@ -84,6 +84,12 @@ def generate_tts():
             text = text[:5000]
             logger.warning("Text truncated to 5000 chars")
 
+        # ✅ ADD THESE — log the incoming script content
+        logger.info("=" * 60)
+        logger.info(f"📝 INCOMING SCRIPT TEXT ({len(text)} chars):")
+        logger.info(f"{text[:500]}{'...' if len(text) > 500 else ''}")
+        logger.info("=" * 60)
+
         # Select voice based on language
         if language == "myanmar":
             voice = MYANMAR_VOICES.get(voice_name, DEFAULT_MYANMAR)

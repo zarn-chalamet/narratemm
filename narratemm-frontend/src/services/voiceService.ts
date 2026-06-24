@@ -15,6 +15,7 @@ export interface GenerateVoiceRequest {
   voiceName: string;
   stylePrompt?: string;
   speed?: number;
+  scriptContent?: string;
 }
 
 export const voiceService = {
@@ -33,7 +34,9 @@ export const voiceService = {
     }
   },
 
-  getAudioUrl: (projectId: string): string => {
-    return `http://localhost:8080/api/voice/audio/${projectId}`;
+  getAudioUrl: (projectId: string, cacheBust?: string): string => {
+    const bust = cacheBust ? `?v=${encodeURIComponent(cacheBust)}` : '';
+    return `http://localhost:8080/api/voice/audio/${projectId}${bust}`;
   },
+  
 };
