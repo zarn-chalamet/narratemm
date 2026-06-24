@@ -29,6 +29,7 @@ export const ProjectPage: React.FC = () => {
   const [currentStep, setCurrentStepState] = useState(1);
   const [transcript, setTranscript] = useState<any>(null);
   const [script, setScript] = useState<any>(null);
+  const [editedContent, setEditedContent] = useState('');
   const [voiceOver, setVoiceOver] = useState<any>(null);
   const [exportSettings, setExportSettings] = useState<any>({ 
     aspectRatio: '9:16', 
@@ -72,32 +73,51 @@ export const ProjectPage: React.FC = () => {
       case 1: return <Step1Upload project={project} onNext={nextStep} />;
       case 2: return (
         <Step2Transcribe 
-          project={project} transcript={transcript} setTranscript={setTranscript}
-          isProcessing={isProcessing} setIsProcessing={setIsProcessing} onNext={nextStep}
+          project={project} 
+          transcript={transcript} 
+          setTranscript={setTranscript}
+          isProcessing={isProcessing} 
+          setIsProcessing={setIsProcessing} 
+          onNext={nextStep}
         />
       );
       case 3: return (
         <Step3Script 
-          project={project} script={script} setScript={setScript}
-          isProcessing={isProcessing} setIsProcessing={setIsProcessing} onNext={nextStep}
+          project={project} 
+          script={script} 
+          setScript={setScript} 
+          editedContent={editedContent}
+          setEditedContent={setEditedContent}
+          isProcessing={isProcessing} 
+          setIsProcessing={setIsProcessing} 
+          onNext={nextStep}
         />
       );
       case 4: return (
         <Step4VoiceOver 
-          project={project} voiceOver={voiceOver} setVoiceOver={setVoiceOver}
-          isProcessing={isProcessing} setIsProcessing={setIsProcessing} onNext={nextStep}
+          project={project} 
+          voiceOver={voiceOver} 
+          setVoiceOver={setVoiceOver}
+          isProcessing={isProcessing} 
+          setIsProcessing={setIsProcessing} 
+          onNext={nextStep}
         />
       );
       case 5: return (
         <Step5Edit 
-          exportSettings={exportSettings} setExportSettings={setExportSettings}
-          onNext={nextStep} projectId={project.id} script={script}
+          exportSettings={exportSettings} 
+          setExportSettings={setExportSettings}
+          onNext={nextStep} 
+          projectId={project.id} 
+          script={script}
         />
       );
       case 6: return (
         <Step6Export 
-          project={project} exportSettings={exportSettings}
-          exportJob={exportJob} setExportJob={setExportJob}
+          project={project} 
+          exportSettings={exportSettings}
+          exportJob={exportJob} 
+          setExportJob={setExportJob}
           updateProgress={updateExportProgress}
         />
       );
@@ -354,10 +374,9 @@ const Step2Transcribe: React.FC<any> = ({ project, transcript, setTranscript, is
 // ─────────────────────────────────────────────────────────────────────────
 // STEP 3: SCRIPT
 // ─────────────────────────────────────────────────────────────────────────
-const Step3Script: React.FC<any> = ({ project, script, setScript, isProcessing, setIsProcessing }) => {
+const Step3Script: React.FC<any> = ({ project, script, setScript,editedContent, setEditedContent, isProcessing, setIsProcessing }) => {
   const [style, setStyle] = useState<'dramatic' | 'casual' | 'spoiler' | 'hype'>('dramatic');
   const [language, setLanguage] = useState<'myanmar' | 'english' | 'both'>('myanmar');
-  const [editedContent, setEditedContent] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -391,12 +410,18 @@ const Step3Script: React.FC<any> = ({ project, script, setScript, isProcessing, 
   }, [project?.id]);
 
   useEffect(() => {
+    if (script?.content && !editedContent) {
+      setEditedContent(script.content);
+    }
+  }, [script?.id]);
+
+  useEffect(() => {
     if (!script || editedContent === script.content) return;
     const timer = setTimeout(async () => {
       setIsSaving(true);
       try {
-        const updated = await scriptService.update(project.id, editedContent);
-        setScript(updated);
+        await scriptService.update(project.id, editedContent);
+        setScript((prev: any) => ({ ...prev, content: editedContent }));
       } catch (err) {} finally { setIsSaving(false); }
     }, 1500);
     return () => clearTimeout(timer);
