@@ -1795,6 +1795,29 @@ const SubtitleStyleEditor: React.FC<SubtitleStyleEditorProps> = ({
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const dragStartRef = useRef<{ x: number; y: number; width: number; mouseX: number } | null>(null);
 
+  // Track actual rendered frame size in state
+  const [frameSize, setFrameSize] = useState({ w: 0, h: 0 });
+
+  // Measure frame size on mount / resize / aspect change
+  useEffect(() => {
+    if (!frameRef.current) return;
+    
+    const measure = () => {
+      if (frameRef.current) {
+        setFrameSize({
+          w: frameRef.current.clientWidth,
+          h: frameRef.current.clientHeight,
+        });
+      }
+    };
+    
+    measure();
+    
+    const ro = new ResizeObserver(measure);
+    ro.observe(frameRef.current);
+    return () => ro.disconnect();
+  }, [aspectRatio]);
+
   const subX = settings.subtitleX ?? 0.5;
   const subY = settings.subtitleY ?? 0.85;
   const width = settings.subtitleWidth ?? 80;
@@ -1882,25 +1905,28 @@ const SubtitleStyleEditor: React.FC<SubtitleStyleEditorProps> = ({
   }, [mode, dragPos, dragWidth, onChange]);
 
   // ─── Build CSS preview style ─────────────────────────────────
-  const getCaptionStyle = (): React.CSSProperties => {
-    // Preview frame is ~400px tall, real video is 1920px (for 9:16)
-    // Scale ratio: 400/1920 ≈ 0.208
-    // So 56px real → ~12px preview, 80px real → ~17px preview
-    
-    // Get scale based on aspect ratio
-    const previewHeight = 400; // matches our preview frame max height
-    const videoHeights: Record<string, number> = {
-      '9:16': 1920,
-      '4:5':  1350,
-      '1:1':  1080,
-      '16:9': 1080,
+    const getCaptionStyle = (): React.CSSProperties => {
+    // Real video dimensions (matches backend resolveResolution)
+    const videoDims: Record<string, { w: number; h: number }> = {
+      '9:16': { w: 1080, h: 1920 },
+      '4:5':  { w: 1080, h: 1350 },
+      '1:1':  { w: 1080, h: 1080 },
+      '16:9': { w: 1920, h: 1080 },
     };
-    const realHeight = videoHeights[aspectRatio] || 1920;
-    const scale = previewHeight / realHeight;
-    
-    const realFontSize = settings.subtitleSize || 56;
+    const dims = videoDims[aspectRatio] || videoDims['9:16'];
+
+    // Read from state, not ref
+    const previewWidth  = frameSize.w || 400;
+    const previewHeight = frameSize.h || 400;
+
+    // Use the SMALLER scale (object-contain behavior — matches video display)
+    const scaleByWidth  = previewWidth  / dims.w;
+    const scaleByHeight = previewHeight / dims.h;
+    const scale = Math.min(scaleByWidth, scaleByHeight);
+
+    const realFontSize    = settings.subtitleSize || 56;
     const previewFontSize = Math.max(8, realFontSize * scale);
-    
+
     const base: React.CSSProperties = {
       fontSize: `${previewFontSize}px`,
       fontFamily: settings.subtitleFont || 'Pyidaungsu',
@@ -1912,7 +1938,7 @@ const SubtitleStyleEditor: React.FC<SubtitleStyleEditorProps> = ({
       maxWidth: '100%',
       wordBreak: 'break-word',
     };
-    
+
     switch (borderStyle) {
       case 'box':
         return { ...base, backgroundColor: bgColor };
@@ -1922,15 +1948,15 @@ const SubtitleStyleEditor: React.FC<SubtitleStyleEditorProps> = ({
         return base;
       case 'outline':
       default: {
-          const o = Math.max(1, outlineWidth * scale * 4);
-          const c = outlineColor;
-          return {
-            ...base,
-            textShadow: `${o}px ${o}px 0 ${c}, -${o}px -${o}px 0 ${c}, ${o}px -${o}px 0 ${c}, -${o}px ${o}px 0 ${c}, ${o}px 0 0 ${c}, -${o}px 0 0 ${c}, 0 ${o}px 0 ${c}, 0 -${o}px 0 ${c}`,
-          };
+        const o = Math.max(1, outlineWidth * scale * 4);
+        const c = outlineColor;
+        return {
+          ...base,
+          textShadow: `${o}px ${o}px 0 ${c}, -${o}px -${o}px 0 ${c}, ${o}px -${o}px 0 ${c}, -${o}px ${o}px 0 ${c}, ${o}px 0 0 ${c}, -${o}px 0 0 ${c}, 0 ${o}px 0 ${c}, 0 -${o}px 0 ${c}`,
+        };
       }
     }
-};
+  };
 
   const isInteracting = mode !== 'idle';
 

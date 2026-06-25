@@ -40,7 +40,7 @@ export const SourceVideoPreview: React.FC<Props> = ({ projectId, isYoutube }) =>
     return (
       <video
         src={sourceUrl}
-        className="absolute inset-0 w-full h-full object-cover"
+        className="absolute inset-0 w-full h-full object-contain bg-black"
         muted
         loop
         autoPlay
@@ -49,5 +49,5 @@ export const SourceVideoPreview: React.FC<Props> = ({ projectId, isYoutube }) =>
     );
   }
 
-  return null; // error state - gradient background shows through
+  return null;
 };
