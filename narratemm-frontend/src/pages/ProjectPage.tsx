@@ -1050,27 +1050,33 @@ const Step5Edit: React.FC<{
   );
 };
 
+
+import { startExportWatcher, useExportStatus } from '../components/hooks/useExportWatcher.ts';
+
 // ─────────────────────────────────────────────────────────────────────────
 // STEP 6: EXPORT
 // ─────────────────────────────────────────────────────────────────────────
 const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExportJob }) => {
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
 
-  const startPolling = (jobId: string) => {
-    pollRef.current = setInterval(async () => {
-      try {
-        const status = await exportService.getStatus(jobId);
-        setExportJob(status);
-        if (status.status === 'done' || status.status === 'failed') {
-          clearInterval(pollRef.current!);
-        }
-      } catch (err) { console.error('Poll error:', err); }
-    }, 2000);
-  };
+  //Live status from notification store (reactive)
+  const liveStatus = useExportStatus(exportJob?.id);
 
-  //Restore previous completed export
+  //Sync live updates from store → local state
+  useEffect(() => {
+    if (!liveStatus || !exportJob?.id) return;
+
+    setExportJob((prev: any) => ({
+      ...prev,
+      status: liveStatus.type === 'export-done' ? 'done' :
+              liveStatus.type === 'export-failed' ? 'failed' : 'processing',
+      progress: liveStatus.metadata?.progress ?? prev.progress,
+      errorMessage: liveStatus.type === 'export-failed' ? liveStatus.message : prev.errorMessage,
+    }));
+  }, [liveStatus?.type, liveStatus?.metadata?.progress]);
+
+  // Restore previous completed export
   useEffect(() => {
     let cancelled = false;
     const loadExistingJob = async () => {
@@ -1078,9 +1084,7 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
       try {
         const latestJob = await exportService.getLatest(project.id);
         if (cancelled) return;
-        
         if (latestJob && latestJob.status === 'done') {
-          console.log('📥 Restored previous export job:', latestJob);
           setExportJob(latestJob);
         }
       } catch (err) {
@@ -1091,6 +1095,7 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
     return () => { cancelled = true; };
   }, [project?.id]);
 
+  // Elapsed timer
   const isActiveRef = useRef(false);
   useEffect(() => {
     const shouldRun = exportJob?.status === 'processing' || isStarting;
@@ -1105,10 +1110,6 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
     const timer = setInterval(() => setElapsedTime((t) => t + 1), 1000);
     return () => clearInterval(timer);
   }, [exportJob?.status, isStarting]);
-
-  useEffect(() => {
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, []);
 
   const formatElapsed = (sec: number) => {
     const m = Math.floor(sec / 60);
@@ -1140,19 +1141,23 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
       subtitleOutlineColor: exportSettings.subtitleOutlineColor,
       subtitleOutlineWidth: exportSettings.subtitleOutlineWidth,
     };
-    console.log('🎬 EXPORT SETTINGS:', settingsToSend);
+
     try {
       const job = await exportService.start(project.id, settingsToSend);
       setExportJob(job);
-      startPolling(job.id);
+
+      //start background watcher — user can navigate away now
+      startExportWatcher(job.id, project.id, project.title || 'Untitled Project');
     } catch (err: any) {
       setExportJob({
-        status: 'failed', progress: 0,
+        status: 'failed',
+        progress: 0,
         errorMessage: err.response?.data?.message || err.message || 'Export failed',
       });
-    } finally { setIsStarting(false); }
+    } finally {
+      setIsStarting(false);
+    }
   };
-
 
   const handleDownload = () => {
     if (!exportJob?.id) return;
@@ -1165,6 +1170,7 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
     document.body.removeChild(a);
   };
 
+  // ─── Done view ────────────────────────────────
   if (exportJob?.status === 'done') {
     return (
       <ExportDoneView
@@ -1177,6 +1183,7 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
     );
   }
 
+  // ─── Failed view ──────────────────────────────
   if (exportJob?.status === 'failed') {
     return (
       <div className="text-center py-8">
@@ -1187,11 +1194,14 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
         <p className="text-red-400 mb-6 max-w-md mx-auto text-sm">
           {exportJob.errorMessage || 'Unknown error occurred'}
         </p>
-        <Button onClick={() => setExportJob(null)} leftIcon={<RefreshCw className="w-4 h-4" />}>Try Again</Button>
+        <Button onClick={() => setExportJob(null)} leftIcon={<RefreshCw className="w-4 h-4" />}>
+          Try Again
+        </Button>
       </div>
     );
   }
 
+  // ─── Processing view ──────────────────────────
   if (isStarting || exportJob?.status === 'processing') {
     const progress = exportJob?.progress ?? 0;
     const isInitializing = isStarting && !exportJob;
@@ -1206,13 +1216,20 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
         <p className="text-gray-400 mb-2">
           {isInitializing ? 'Preparing FFmpeg pipeline' : 'FFmpeg is combining everything'}
         </p>
-        <p className="text-xs text-yellow-400/80 mb-6 max-w-md mx-auto">
-          ⏱️ This typically takes 2–5 minutes. Please keep this tab open.
-        </p>
+        
+        {/*let user know they can leave */}
+        <div className="max-w-md mx-auto mb-6 p-3 bg-green-500/10 border border-green-500/30 rounded-xl">
+          <p className="text-xs text-green-400">
+            ✨ Feel free to navigate away — we'll notify you when it's done!
+          </p>
+        </div>
+
         <div className="max-w-md mx-auto">
           <div className="flex justify-between mb-2 text-sm">
             <span className="text-gray-400">{isInitializing ? 'Status' : 'Progress'}</span>
-            <span className="text-violet-400 font-mono">{isInitializing ? 'Starting...' : `${progress}%`}</span>
+            <span className="text-violet-400 font-mono">
+              {isInitializing ? 'Starting...' : `${progress}%`}
+            </span>
           </div>
           <div className="h-3 bg-[#1a1a24] rounded-full overflow-hidden">
             {isInitializing ? (
@@ -1232,6 +1249,7 @@ const Step6Export: React.FC<any> = ({ project, exportSettings, exportJob, setExp
     );
   }
 
+  // ─── Initial "Ready to export" view ───────────
   return (
     <div className="text-center py-8">
       <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-orange-500/20 flex items-center justify-center">
