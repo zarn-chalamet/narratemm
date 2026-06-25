@@ -28,6 +28,7 @@ Transform any video into engaging recap content with AI-generated Burmese script
 - 📐 **Multi-Format Export** — 9:16 (TikTok/Reels), 4:5 (Instagram), 1:1 (Square), 16:9 (YouTube)
 - 🎚️ **Audio Mixing** — Balance original audio with voice-over (0-100%)
 - ⏱️ **Auto-Sync** — Voiceover tempo adjustment to match video duration
+- 🔔 **Background Export** — Navigate freely while rendering, get notified when your video is ready
 
 ---
 
@@ -56,6 +57,7 @@ Transform any video into engaging recap content with AI-generated Burmese script
 | **React Router** | Navigation |
 | **Axios** | HTTP client |
 | **Lucide React** | Icon library |
+| **Zustand** | State management + persistent notification store (localStorage) |
 
 ### AI & External Services
 | Service | Purpose |
@@ -146,6 +148,16 @@ Default text wrapping breaks Burmese words at incorrect points.
 
 **Solution:** Custom `LineBreakMeasurer` implementation with Myanmar-specific punctuation handling (၊ ။).
 
+### 5. **Background Export with Persistent Notifications**
+Exports take 1–10 minutes — forcing users to wait on one page is bad UX.
+
+**Solution:** Built a Zustand-powered notification store with `persist` middleware that:
+- Runs export polling **outside** the component lifecycle (survives page navigation)
+- Persists in-progress jobs to **localStorage** — resumes polling after page refresh
+- Shows live progress in a **bell icon** across all pages
+- Fires a **browser push notification** when export completes
+- Designed generically — supports future notification types (product updates, announcements) without refactoring
+
 ---
 
 ## 🚀 Getting Started
@@ -181,7 +193,7 @@ TTS service will start on `http://localhost:5005`
 #### `requirements.txt`
 ```
 edge-tts
-flask        # or fastapi + uvicorn
+flask
 ```
 
 #### How it works
